@@ -1,4 +1,4 @@
-// Typed request/response protocol between the main thread and the camel-web worker.
+// Requests the main thread sends to the page-engine worker (see rpc.ts for the transport).
 
 import type { ComicFiles } from "./storage/files.ts";
 
@@ -15,7 +15,7 @@ export interface RecordSummary {
   readonly plan_key: unknown;
 }
 
-export interface Requests {
+export type Requests = {
   openComic: { request: { comic: ComicFiles }; result: { pages: string[] } };
   setFont: { request: { font: ArrayBuffer; glossary: string | null }; result: null };
   summarize: {
@@ -35,20 +35,9 @@ export interface Requests {
     request: { plan: string; index: string; previous: string; keys: string; position: number };
     result: string;
   };
-  zip: { request: { paths: string[]; contents: ArrayBuffer[] }; result: ArrayBuffer };
-}
-
-export type RequestType = keyof Requests;
-
-export interface RequestMessage<T extends RequestType = RequestType> {
-  readonly id: number;
-  readonly type: T;
-  readonly payload: Requests[T]["request"];
-}
-
-export type ResponseMessage =
-  | { readonly id: number; readonly ok: true; readonly result: unknown }
-  | { readonly id: number; readonly ok: false; readonly error: string };
+  /** Raw bytes of comic page `index` (unverified: analysis has no reference yet). */
+  pageBytes: { request: { index: number }; result: ArrayBuffer };
+};
 
 /** Comic page index encoded in a record's source reference "@index:sha256". */
 export function referenceIndex(reference: string): number {

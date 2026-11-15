@@ -1,20 +1,26 @@
-// First-run / open screen: project folder, comic, font, browser tier, recent projects.
+// First-run screen: open an existing project (folder, comic, font, recent projects) or create
+// a new one (see NewProject.tsx).
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { call } from "./engine.ts";
+import { NewProject } from "./NewProject.tsx";
 import { recordReference } from "./protocol.ts";
 import { Session, readIndex } from "./session.ts";
-import { start } from "./state.ts";
+import { openMode, start } from "./state.ts";
 import {
+  type BrowserProject,
   type ComicChoice,
   type FontData,
   type ProjectChoice,
   type RecentProject,
+  ProjectFiles,
+  browserProjects,
   chooseComicArchive,
   chooseComicFolder,
   chooseFont,
   chooseProject,
+  deleteBrowserProject,
   forgetProject,
   recentProjects,
   rememberProject,
@@ -22,6 +28,7 @@ import {
   reopen,
   tier,
 } from "./storage/files.ts";
+import { DirectoryStore } from "./storage/store.ts";
 
 const TIER_LINE =
   tier === "direct"
@@ -39,29 +46,54 @@ interface ComicState {
   readonly pages: string[];
 }
 
-type Check = { readonly state: "idle" | "checking" | "ok" } | { readonly state: "error"; readonly message: string };
+export type Check = { readonly state: "idle" | "checking" | "ok" } | { readonly state: "error"; readonly message: string };
 
-function message(error: unknown): string {
+export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function comicName(choice: ComicChoice): string {
+export function comicName(choice: ComicChoice): string {
   return choice.comic.kind === "archive" ? choice.comic.file.name : `${choice.comic.name}/`;
 }
 
 export function OpenScreen() {
+  const mode = openMode.value;
+  return (
+    <main class="open-screen">
+      <div class="buttons joined mode-switch" role="group" aria-label="Project">
+        <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => (openMode.value = "open")}>
+          Open project
+        </button>
+        <button type="button" class="button" aria-pressed={mode === "new"} onClick={() => (openMode.value = "new")}>
+          New project
+        </button>
+      </div>
+      {/* Both stay mounted so choices (and a running analysis view) survive switching. */}
+      <div class="open-mode" hidden={mode !== "open"}>
+        <OpenProject />
+      </div>
+      <div class="open-mode" hidden={mode !== "new"}>
+        <NewProject />
+      </div>
+    </main>
+  );
+}
+
+function OpenProject() {
   const [projectState, setProject] = useState<ProjectState | null>(null);
   const [projectCheck, setProjectCheck] = useState<Check>({ state: "idle" });
   const [comic, setComic] = useState<ComicState | null>(null);
   const [comicCheck, setComicCheck] = useState<Check>({ state: "idle" });
   const [font, setFont] = useState<FontData | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
+  const [stored, setStored] = useState<BrowserProject[]>([]);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
   useEffect(() => {
     void rememberedFont().then((remembered) => remembered && setFont(remembered));
     void recentProjects().then(setRecent);
+    if (tier === "snapshot") void browserProjects().then(setStored);
   }, []);
 
   // Verify the comic against the project's first page whenever either changes.
@@ -73,7 +105,7 @@ export function OpenScreen() {
       .catch((error: unknown) =>
         setComicCheck({
           state: "error",
-          message: `This comic does not match the project: page 1 differs (${message(error)})`,
+          message: `This comic does not match the project: page 1 differs (${errorMessage(error)})`,
         }),
       );
   }, [comic, projectState]);
@@ -87,7 +119,7 @@ export function OpenScreen() {
       setProjectCheck({ state: "ok" });
     } catch (error) {
       setProject(null);
-      setProjectCheck({ state: "error", message: message(error) });
+      setProjectCheck({ state: "error", message: errorMessage(error) });
     }
   };
 
@@ -99,12 +131,12 @@ export function OpenScreen() {
       if (!projectState?.reference) setComicCheck({ state: "ok" });
     } catch (error) {
       setComic(null);
-      setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${message(error)}` });
+      setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${errorMessage(error)}` });
     }
   };
 
   const pick = (action: () => Promise<void>) => (): void => {
-    action().catch((error: unknown) => setOpenError(message(error)));
+    action().catch((error: unknown) => setOpenError(errorMessage(error)));
   };
 
   const open = async (): Promise<void> => {
@@ -114,7 +146,7 @@ export function OpenScreen() {
     try {
       const session = await Session.open({
         files: projectState.choice.files,
-        comicPages: comic && comicCheck.state === "ok" ? comic.pages : null,
+        comic: comic && comicCheck.state === "ok" ? { files: comic.choice.comic, pages: comic.pages } : null,
         font,
         onProgress: (done, total) => setProgress({ done, total }),
       });
@@ -129,7 +161,7 @@ export function OpenScreen() {
       await start(session);
     } catch (error) {
       setProgress(null);
-      setOpenError(message(error));
+      setOpenError(errorMessage(error));
     }
   };
 
@@ -143,7 +175,7 @@ export function OpenScreen() {
   const ready = projectState !== null && font !== null && comicCheck.state !== "checking";
 
   return (
-    <main class="open-screen">
+    <>
       <section class="open-panel" aria-labelledby="open-title">
         <div class="section-head">
           <h2 id="open-title">Open project</h2>
@@ -246,11 +278,50 @@ export function OpenScreen() {
           </ol>
         </section>
       )}
-    </main>
+
+      {stored.length > 0 && (
+        <section class="open-panel" aria-labelledby="stored-title">
+          <div class="section-head">
+            <h2 id="stored-title">Projects in this browser</h2>
+          </div>
+          <ol class="rows">
+            {stored.map((entry) => (
+              <li key={entry.name} class="recent">
+                <span>{entry.name}</span>
+                <span class="mono dim">{entry.state === "project" ? "READY" : "ANALYSIS UNFINISHED"}</span>
+                {entry.state === "project" ? (
+                  <button
+                    type="button"
+                    class="button small"
+                    onClick={pick(() => loadProject({ files: new ProjectFiles(new DirectoryStore(entry.handle)), handle: null }))}
+                  >
+                    Choose
+                  </button>
+                ) : (
+                  <button type="button" class="button small" onClick={() => (openMode.value = "new")}>
+                    Continue…
+                  </button>
+                )}
+                <button
+                  type="button"
+                  class="link"
+                  onClick={() => {
+                    if (!confirm(`Delete the project "${entry.name}" from this browser? Download it first to keep it.`)) return;
+                    void deleteBrowserProject(entry.name).then(() => browserProjects().then(setStored));
+                  }}
+                >
+                  Delete
+                </button>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+    </>
   );
 }
 
-function Slot(props: {
+export function Slot(props: {
   number: number;
   title: string;
   note: string;

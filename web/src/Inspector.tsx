@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Layout, PageDocument, Region, Retained } from "./model.ts";
+import type { ReviewItem } from "./reports.ts";
 import { pagePixels } from "./Canvas.tsx";
 import { hexRgb, rgbHex, sampleBackground } from "./color.ts";
 import { spanArea } from "./spans.ts";
@@ -15,6 +16,7 @@ import {
   hoveredUnresolved,
   preview,
   registerDirtyField,
+  reviewItems,
   selectRegion,
   selectedRegion,
   selection,
@@ -325,6 +327,8 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
         </div>
       </div>
 
+      <RegionReview region={region} />
+
       <FontSize region={region} layout={layout} />
       {retained && retained.reason !== "missing_translation" && (
         <p class="alert" role="status">
@@ -625,8 +629,69 @@ function DraftPanel() {
   );
 }
 
+const NO_ITEMS: readonly ReviewItem[] = [];
+
+/** Review items (latest audit / check-terms reports) of the open page. */
+function pageItems(page: PageDocument): readonly ReviewItem[] {
+  return reviewItems.value.get(page.file) ?? NO_ITEMS;
+}
+
+function RegionReview({ region }: { region: Region }) {
+  const page = doc.value;
+  const items = page ? pageItems(page).filter((item) => item.region === region.id) : NO_ITEMS;
+  if (items.length === 0) return null;
+  return (
+    <fieldset class="group">
+      <legend>
+        Review <span class="mono dim">{items.length}</span>
+      </legend>
+      <ol class="review-items">
+        {items.map((item, at) => {
+          const applied = item.suggestion !== null && region.translation === item.suggestion;
+          const changed = !applied && item.translation !== null && region.translation !== item.translation;
+          return (
+            <li key={at} class="review-item">
+              <span class="mono review-label">{item.label}</span>
+              <p>{item.reason}</p>
+              {item.evidence && <p class="helper">Evidence: {item.evidence}</p>}
+              {item.suggestion !== null && (
+                <p class="review-suggestion" lang="zh-Hans">
+                  {item.suggestion}
+                </p>
+              )}
+              {changed && <p class="helper">The translation has changed since this report.</p>}
+              <div class="buttons">
+                {applied ? (
+                  <span class="mono dim">APPLIED</span>
+                ) : item.suggestion !== null ? (
+                  <button
+                    type="button"
+                    class="button small"
+                    onClick={() => void submit([{ op: "set_translation", region: region.id, text: item.suggestion }])}
+                  >
+                    Apply suggestion
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    class="button small"
+                    onClick={() => (focusRequest.value = { field: "translation", region: region.id })}
+                  >
+                    Edit translation
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </fieldset>
+  );
+}
+
 function PageSection({ page }: { page: PageDocument }) {
   const hovered = hoveredUnresolved.value;
+  const items = pageItems(page);
   const listRef = useRef<HTMLOListElement>(null);
   useEffect(() => {
     listRef.current?.querySelector('[data-hovered=""]')?.scrollIntoView({ block: "nearest" });
@@ -652,6 +717,32 @@ function PageSection({ page }: { page: PageDocument }) {
         </label>
         <p class="helper">For covers, credits and sound-effect pages.</p>
       </div>
+
+      {items.length > 0 && (
+        <fieldset class="group">
+          <legend>
+            Review items <span class="mono dim">{items.length}</span>
+          </legend>
+          <ol class="candidates">
+            {items.map((item, at) => {
+              const order = page.regions.findIndex((region) => region.id === item.region) + 1;
+              return (
+                <li key={at}>
+                  <span class="candidate-text">
+                    <span class="mono dim">{order > 0 ? `#${order}` : "REMOVED"}</span> {item.label}
+                  </span>
+                  {order > 0 && (
+                    <button type="button" class="button small" onClick={() => selectRegion(item.region)}>
+                      Show
+                    </button>
+                  )}
+                  <span class="helper">{item.reason}</span>
+                </li>
+              );
+            })}
+          </ol>
+        </fieldset>
+      )}
 
       {page.unresolved.length > 0 && (
         <fieldset class="group">

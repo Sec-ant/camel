@@ -1,6 +1,8 @@
-// Bundles the workbench into dist/: index.html, assets/app.{js,css}, assets/worker.js and the
-// camel-web wasm binary. `node build.mjs --serve` rebuilds on change and serves dist on
-// http://localhost:5173 (a secure context, as the File System Access API requires).
+// Bundles the workbench into dist/: index.html, assets/app.{js,css}, the workers
+// (assets/worker.js: page engine, assets/pipeline-worker.js: long operations,
+// assets/analyzer-worker.js: one recognition engine each) and the camel-web wasm binary.
+// `node build.mjs --serve` rebuilds on change and serves dist on http://localhost:5173 (a
+// secure context, as the File System Access API requires).
 import { access, copyFile, mkdir } from "node:fs/promises";
 import { context } from "esbuild";
 
@@ -28,7 +30,9 @@ const wasmStub = {
     build.onResolve({ filter: /wasm\/camel_web\.js$/ }, () => ({ path: "camel-web-stub", namespace: "stub" }));
     build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
       contents: `export default async function init() { throw new Error("The camel-web module has not been built (web/src/wasm is empty)"); }
-export const Comic = null, Workbench = null, applyEdits = null, repairPlan = null, summarize = null, verifyPage = null, zipFiles = null;`,
+export const Comic = null, Workbench = null, applyEdits = null, repairPlan = null, summarize = null, verifyPage = null,
+  Analyzer = null, audit = null, beginAnalysis = null, checkLayout = null, checkTerms = null, exportPages = null,
+  finishAnalysis = null, prepare = null, translate = null;`,
     }));
   },
 };
@@ -48,6 +52,8 @@ const ctx = await context({
   entryPoints: [
     { in: "src/main.tsx", out: "app" },
     { in: "src/worker.ts", out: "worker" },
+    { in: "src/pipeline/worker.ts", out: "pipeline-worker" },
+    { in: "src/pipeline/analyzer.ts", out: "analyzer-worker" },
     { in: "src/styles.css", out: "app" },
   ],
   outdir: "dist/assets",

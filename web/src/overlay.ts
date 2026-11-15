@@ -128,6 +128,8 @@ export function drawOverlay(context: CanvasRenderingContext2D, scene: OverlaySce
   const { view, ratio, doc } = scene;
   const deviceWidth = Math.round(scene.width * ratio);
   const deviceHeight = Math.round(scene.height * ratio);
+  // The workbench is hidden (display: none) while the Jobs or Settings screen is shown.
+  if (deviceWidth === 0 || deviceHeight === 0) return;
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.clearRect(0, 0, deviceWidth, deviceHeight);
   context.imageSmoothingEnabled = false;

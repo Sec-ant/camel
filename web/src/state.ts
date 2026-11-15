@@ -1,16 +1,10 @@
 // Application state (signals) and the actions that read and write the project.
 
 import { batch, computed, signal } from "@preact/signals";
-import {
-  ConflictError,
-  type Edit,
-  type EditResult,
-  type PageDocument,
-  type Preview,
-  type Project,
-  type Region,
-} from "./model.ts";
+import type { Edit, EditResult, PageDocument, Preview, Project, Region } from "./model.ts";
+import { type ReviewItem, REPORTS, auditItems, itemsByPage, latestReport, termItems } from "./reports.ts";
 import type { Session } from "./session.ts";
+import { HostError } from "./storage/store.ts";
 import { type PageFilter, adjacentMatch } from "./pages.ts";
 import type { Rect, Span } from "./spans.ts";
 
@@ -71,10 +65,29 @@ const preferences = stored("preferences", {
 
 let session: Session | null = null;
 
+/** The open project's session, for pipeline jobs and downloads. */
+export function activeSession(): Session | null {
+  return session;
+}
+
+/** Top-level screen: the workbench (or the open screen before a project), jobs, settings. */
+export type View = "main" | "jobs" | "settings";
+export const view = signal<View>("main");
+/** Open screen mode before a project is open. */
+export const openMode = signal<"open" | "new">("open");
+
+/** Review items of the latest audit and check-terms reports, by record file name. */
+export const reviewItems = signal<ReadonlyMap<string, readonly ReviewItem[]>>(new Map());
+/** Paths of the reports `reviewItems` came from. */
+export const reviewSources = signal<{ readonly audit: string | null; readonly terms: string | null }>({
+  audit: null,
+  terms: null,
+});
+
 export const project = signal<Project | null>(null);
 /** Object URL of the open page's original image; null url when no comic was chosen. */
 export const pageImage = signal<{ index: number; url: string | null; error?: string } | null>(null);
-/** Snapshot tier: files edited locally and not yet downloaded. */
+/** Overlay projects: files edited locally and not yet downloaded. */
 export const localChanges = signal(0);
 export const pageIndex = signal(0);
 export const doc = signal<PageDocument | null>(null);
@@ -203,23 +216,64 @@ export function redo(): Promise<EditResult | null> {
   return enqueue((current) => session!.redo(current.index, current.revision));
 }
 
-export async function downloadChanges(): Promise<void> {
+async function reportFailure(action: () => Promise<void>): Promise<void> {
   try {
-    await session?.downloadChanges();
+    await action();
   } catch (error) {
     announce(error instanceof Error ? error.message : String(error), "error");
   }
 }
 
-/** Snapshot tier: drops locally stored edits (after unpacking the download) and reopens. */
+export function downloadChanges(): Promise<void> {
+  return reportFailure(() => session!.downloadChanges());
+}
+
+export function downloadProject(): Promise<void> {
+  return reportFailure(() => session!.downloadProject());
+}
+
+/** Overlay projects: drops locally stored edits (after unpacking the download) and reopens. */
 export async function discardChanges(): Promise<void> {
   if (!session || !confirm("Discard the edits stored in this browser? Download them first if you have not.")) return;
-  await session.files.discard();
+  await session.files.store.discard();
   location.href = location.pathname;
 }
 
+/** Loads the review items of the newest audit and check-terms reports. */
+export async function loadReviews(): Promise<void> {
+  if (!session) return;
+  const { store } = session.files;
+  const names = await store.list(REPORTS);
+  const audit = latestReport(names, "audit");
+  const terms = latestReport(names, "terms");
+  const decoder = new TextDecoder();
+  const read = async (path: string | null, parse: (json: string) => ReviewItem[]): Promise<ReviewItem[]> => {
+    const stored = path ? await store.read(path) : null;
+    if (!stored) return [];
+    try {
+      return parse(decoder.decode(stored.bytes));
+    } catch (error) {
+      announce(`${path} could not be read: ${error instanceof Error ? error.message : String(error)}`, "error");
+      return [];
+    }
+  };
+  const items = [...(await read(audit, auditItems)), ...(await read(terms, termItems))];
+  batch(() => {
+    reviewItems.value = itemsByPage(items);
+    reviewSources.value = { audit, terms };
+  });
+}
+
+/** Re-reads what a pipeline job changed: page records, the local change count, review reports. */
+export async function syncProject(): Promise<void> {
+  if (!session) return;
+  await refreshProject(true);
+  localChanges.value = await session.changeCount();
+  await loadReviews();
+}
+
 async function handleWriteError(error: unknown, index: number): Promise<void> {
-  if (error instanceof ConflictError) {
+  if (error instanceof HostError && error.kind === "conflict") {
     // The reload brings the view in sync with the project files; nothing is left unsaved
     // except the rejected change, which the notice reports.
     saveState.value = "idle";
@@ -433,7 +487,7 @@ export async function start(opened: Session): Promise<void> {
   const { page, region } = readHash();
   const count = project.value.pages.length;
   await openPage(Math.min(Math.max(page, 0), Math.max(count - 1, 0)), region);
-  if (opened.tier === "direct") {
+  if (opened.location === "folder") {
     setInterval(() => {
       if (document.visibilityState === "visible") void refreshProject(true);
     }, 5000);
@@ -441,6 +495,7 @@ export async function start(opened: Session): Promise<void> {
       if (document.visibilityState === "visible") void refreshProject(true);
     });
   }
+  void loadReviews();
   addEventListener("hashchange", () => {
     const target = readHash();
     if (target.page !== pageIndex.value) void openPage(target.page, target.region);

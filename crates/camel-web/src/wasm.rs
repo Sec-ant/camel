@@ -220,23 +220,6 @@ pub fn repair_plan(
     .map_err(error)
 }
 
-/// Builds a stored ZIP of `paths[i]` -> `contents[i]`.
-///
-/// # Errors
-///
-/// Throws for mismatched lists or invalid paths.
-#[wasm_bindgen(js_name = zipFiles)]
-pub fn zip_files(paths: Vec<String>, contents: Vec<Uint8Array>) -> Result<Vec<u8>, JsError> {
-    if paths.len() != contents.len() {
-        return Err(error("Each path needs exactly one file content"));
-    }
-    let entries: Vec<_> = paths
-        .into_iter()
-        .zip(contents.into_iter().map(|bytes| bytes.to_vec()))
-        .collect();
-    crate::zip_files(&entries).map_err(error)
-}
-
 /// Typesetting state for page documents and previews.
 #[wasm_bindgen]
 #[derive(Debug)]

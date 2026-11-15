@@ -19,6 +19,7 @@ import {
   stepRegion,
   tool,
   undo,
+  view as screen,
   viewMode,
 } from "./state.ts";
 
@@ -47,7 +48,8 @@ function onKeyDown(event: KeyboardEvent): void {
     helpOpen.value = false;
     return;
   }
-  if (isTextField(event.target)) return;
+  // Workbench shortcuts do nothing on the Jobs and Settings screens.
+  if (isTextField(event.target) || screen.value !== "main") return;
   const mod = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
 
