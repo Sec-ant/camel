@@ -97,7 +97,9 @@ export function ReaderScreen() {
       </div>
     </details>
     {error && <p class="alert reader-error">{error}</p>}
-    <main class="reader-page">{image ? <img src={image} alt={`Page ${page + 1}`} /> : <p>Loading page…</p>}</main>
-    {busy && <div class="reader-job"><JobView /></div>}
+    <div class="reader-content">
+      <main class="reader-page">{image ? <img src={image} alt={`Page ${page + 1}`} /> : <p>Loading page…</p>}</main>
+      {busy && <aside class="reader-job" aria-label="Analysis progress"><JobView /></aside>}
+    </div>
   </div>;
 }

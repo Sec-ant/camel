@@ -30,7 +30,7 @@ export async function installStarterProject(): Promise<FileSystemDirectoryHandle
       localStorage.setItem("camel.projects.initialized", "1");
       return null;
     }
-    const directory = await browserProject("Coffee for You");
+    const directory = await browserProject("Anda's Game");
     const store = new DirectoryStore(directory);
     for (const [i, path] of projectPaths.entries()) {
       await store.write(path, new Uint8Array(records[i]!), { kind: "create_new" });

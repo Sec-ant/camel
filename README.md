@@ -60,4 +60,4 @@ just check    # Rust formatting, Clippy, tests, and docs
 
 The static build is written to `web/dist/`. GitHub Actions deploys it to GitHub Pages on pushes to `main`.
 
-The starter project uses two pages from *Coffee for You* by [ArtAvenue](https://krita-artists.org/t/coffee-for-you-short-comic/3394), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The pages have been translated into Chinese. The default preview font is [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), licensed under the SIL Open Font License.
+The starter project contains two pages from [*Anda's Game*](https://archive.org/details/CoryDoctorowsFuturisticTalesOfTheHereAndNow), by Cory Doctorow, Dara Naraghi, Esteve Polls and collaborators, with Chinese translations. The sample is licensed for noncommercial use under [CC BY-NC-SA 3.0 US](https://creativecommons.org/licenses/by-nc-sa/3.0/us/); its license is separate from the software. The default preview font is [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), licensed under the SIL Open Font License.
