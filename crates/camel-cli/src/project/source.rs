@@ -1,25 +1,9 @@
-use anyhow::{Context as _, Result, bail};
+//! Original comic pages for a project on disk.
+
+use anyhow::{Context as _, Result};
 use camel::comic::ComicSource;
-use serde::{Deserialize, Serialize};
+use camel_project::source::{SourceManifest, parse_reference, verify_page};
 use std::path::{Path, PathBuf};
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(super) struct SourceManifest {
-    pub path: PathBuf,
-}
-
-pub(super) fn page_reference(index: usize, bytes: &[u8]) -> String {
-    let hash = ring::digest::digest(&ring::digest::SHA256, bytes);
-    let digest: String = hash.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    format!("@{index}:{digest}")
-}
-
-pub(super) fn verify_page(reference: &str, index: usize, bytes: &[u8]) -> Result<()> {
-    if reference != page_reference(index, bytes) {
-        bail!("source page differs from the analyzed original");
-    }
-    Ok(())
-}
 
 pub(super) struct ProjectSource {
     path: PathBuf,
@@ -36,11 +20,7 @@ impl ProjectSource {
     }
 
     pub fn bytes(&mut self, reference: &str) -> Result<Vec<u8>> {
-        let encoded = reference
-            .strip_prefix('@')
-            .context("invalid page reference")?;
-        let (number, _) = encoded.split_once(':').context("invalid page reference")?;
-        let index: usize = number.parse().context("invalid source page number")?;
+        let (index, _) = parse_reference(reference)?;
         if self.source.is_none() {
             self.source = Some(
                 ComicSource::open(&self.path)

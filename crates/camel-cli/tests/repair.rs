@@ -50,14 +50,7 @@ fn fixture() -> (TempDir, Value) {
     }
     let source = root.join("sources/00001.png");
     image.save(&source).unwrap();
-    let hash = ring::digest::digest(&ring::digest::SHA256, &fs::read(source).unwrap());
-    let reference = format!(
-        "@0:{}",
-        hash.as_ref()
-            .iter()
-            .map(|x| format!("{x:02x}"))
-            .collect::<String>()
-    );
+    let reference = camel_project::source::page_reference(0, &fs::read(source).unwrap());
     let word = |text: &str, x, y, width, height| json!({"text":text,"bounds":{"x":x,"y":y,"width":width,"height":height},"confidence":99.0,"line":0});
     let old = word("OLD", 20, 20, 20, 10);
     let new = word("NEW", 125, 75, 30, 10);
@@ -182,14 +175,7 @@ fn rejects_unknown_region_and_keeps_unassigned_ink_outside_masks() {
         }
     }
     img.save(&source).unwrap();
-    let hash = ring::digest::digest(&ring::digest::SHA256, &fs::read(&source).unwrap());
-    let reference = format!(
-        "@0:{}",
-        hash.as_ref()
-            .iter()
-            .map(|x| format!("{x:02x}"))
-            .collect::<String>()
-    );
+    let reference = camel_project::source::page_reference(0, &fs::read(&source).unwrap());
     let mut record = read(&page);
     record["source"] = json!(reference);
     write(&page, &record);

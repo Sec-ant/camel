@@ -1,0 +1,26 @@
+[package]
+name = "camel"
+description = "A composable comic translation pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ab_glyph = { workspace = true, features = ["std", "variable-fonts"] }
+base64 = { workspace = true, features = ["std"] }
+flate2 = { workspace = true, features = ["rust_backend"] }
+image = { workspace = true, features = ["png", "jpeg"] }
+jieba-rs.workspace = true
+rars.workspace = true
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+thiserror = { workspace = true, features = ["std"] }
+zip = { workspace = true, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

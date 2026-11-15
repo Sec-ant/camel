@@ -194,9 +194,10 @@ fn serial_and_parallel_pages_keep_natural_order_with_all_model_path_options() {
             let record: serde_json::Value =
                 serde_json::from_slice(&fs::read(output.join(&index[i])).unwrap()).unwrap();
             let bytes = fs::read(input.join(name)).unwrap();
-            let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
-            let hash: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-            assert_eq!(record["source"], format!("@{i}:{hash}"));
+            assert_eq!(
+                record["source"],
+                camel_project::source::page_reference(i, &bytes)
+            );
             assert_eq!(record["page"]["regions"], serde_json::json!([]));
             assert_eq!(record["analysis"]["ocr_engine"], "pp-ocr-ctc");
             assert!(!output.join("sources").exists());

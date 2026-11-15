@@ -557,7 +557,7 @@ fn uncovered_balloons_recover_short_text_and_ellipsis() {
                 .find(|o| o.block_id == Some(region.block.id))
                 .unwrap();
             assert_eq!(observation.geometric_lines, [0]);
-            assert_eq!(region.block.words[0].confidence, 0.0);
+            assert!(region.block.words[0].confidence.abs() < f32::EPSILON);
         }
     }
 }

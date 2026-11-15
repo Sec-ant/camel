@@ -26,6 +26,10 @@ fn project() -> TempDir {
     dir
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "replies are built inline by callers"
+)]
 fn respond(request: tiny_http::Request, value: Value) {
     let data =
         json!({"choices":[{"finish_reason":"stop","message":{"content":value.to_string()}}]})

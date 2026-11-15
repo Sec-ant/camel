@@ -74,6 +74,9 @@ fn map_words(
     words
 }
 
+/// Minimum detector score for a region to enter page analysis.
+const DETECTION_THRESHOLD: f32 = 0.3;
+
 /// Shared in-process detection and recognition models.
 #[derive(Debug)]
 pub struct Engine {
@@ -82,7 +85,11 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Loads `detector.onnx` and `recognizer.onnx` once for a batch.
+    /// Loads `detector.onnx` and `recognizer.onnx` from `directory` with a `threads`-wide pool.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Model`] or [`Error::Output`] when either model is missing or invalid.
     pub fn load(directory: &Path, threads: usize) -> Result<Self, Error> {
         let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
         Ok(Self {
@@ -92,6 +99,7 @@ impl Engine {
     }
 
     /// Reuse loaded weights with a separate inference thread pool.
+    #[must_use]
     pub fn with_threads(&self, threads: usize) -> Self {
         let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
         Self {
@@ -106,9 +114,14 @@ impl Engine {
         }
     }
 
-    /// Detect, recognize and partition all dialogue before preparing erasure geometry.
+    /// Detects, recognizes, and partitions all page text into a [`Page`] with analysis metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::EmptyImage`] for an empty image and [`Error::Model`] or
+    /// [`Error::Output`] when detection or recognition inference fails.
     pub fn analyze(&self, image: &RgbImage) -> Result<(Page, AnalysisMetadata), Error> {
-        let detections = self.detector.detect(image, 0.3)?;
+        let detections = self.detector.detect(image, DETECTION_THRESHOLD)?;
         let panels = panels::detect(image);
         let mut visual = Vec::new();
         let mut blocks = Vec::new();
@@ -147,8 +160,8 @@ impl Engine {
                     .iter()
                     .filter(|d| d.kind != DetectionKind::Bubble)
                     .any(|d| {
-                        let cx = (d.bounds[0] + d.bounds[2]) / 2.0;
-                        let cy = (d.bounds[1] + d.bounds[3]) / 2.0;
+                        let cx = f32::midpoint(d.bounds[0], d.bounds[2]);
+                        let cy = f32::midpoint(d.bounds[1], d.bounds[3]);
                         cx >= bounds.x as f32
                             && cx < bounds.right() as f32
                             && cy >= bounds.y as f32
@@ -648,7 +661,6 @@ fn isolated_reconciliation_fragment(original: &TextBlock, remaining: &TextBlock)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use camel::Word;
 
     #[test]
     fn uniform_detection_keeps_even_a_single_contrasting_pixel() {

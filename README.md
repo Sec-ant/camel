@@ -32,13 +32,21 @@ camel analyze comic.cbr -o book --models models/
 camel translate book \
   --base-url https://token-plan-cn.xiaomimimo.com/v1 \
   --model mimo-v2.6-pro
-camel serve book
 camel export book -o translated.cbz --font /path/to/comic.ttf
 ```
 
-`serve` 在本机启动阅读界面，使用打印出的地址打开；默认读取项目记录的原漫画路径，原漫画移动后可用 `--source` 临时指定阅读器使用的新路径；要让翻译和导出也使用新路径，可修改项目 `source.json` 中的 `path`。原始漫画支持 CBR/RAR、CBZ/ZIP 和图片目录；页面依次叠加擦字和译文图层，可单独切换，并在右侧编辑、保存对白。每页读取时核对原图内容，未翻译的区域也能显示擦字效果。
+## 校对工作台
 
-界面资源已打包进 CLI。修改界面源码后，可运行 `just ui` 重新构建和测试。
+工作台是纯静态网页，核心库编译为 WebAssembly 在浏览器的 Web Worker 中运行，不需要后台服务。`just web-dev` 构建后在 http://localhost:5173 打开；构建产物 `web/dist/` 也可放在任意静态托管上。
+
+打开时依次选择项目目录、原漫画（CBZ/ZIP、CBR/RAR 文件或图片目录）和中文字体。每页读取时按项目记录核对原图内容，选错漫画会直接提示。工作台可以：
+
+- 逐页查看原图、擦字和成品三种画面，叠加区域编号、擦除掩码、排版区、OCR 词框、未识别候选和字形；预览与 `camel export --allow-partial` 的结果一致，并列出保留原文的区域及原因。
+- 修改译文（`\n` 为手动换行）、校正 OCR 原文、设置字号，标记区域或整页保留原文。
+- 用画笔增减擦除掩码和排版区，改用纯色填充（可吸取页面颜色），框选新建区域、把未识别候选转为区域、删除误识别区域。
+- 每页撤销/重做；改动原文、保留标记或区域增删时，同步更新翻译检查点、上下文和 `translation-plan.json`。
+
+Chromium 内核浏览器（Chrome、Edge 等）直接读写项目目录，并在几秒内显示 `camel translate` 等外部写入；两边改动同一页时，后写入的一方会发现冲突，工作台重新载入该页，`translate` 保留工作台的改动，该页留待下次补译。Firefox 和 Safari 以只读方式载入项目，改动保存在浏览器中，用“Download changes”下载只含改动文件的 zip，解压覆盖到项目目录。
 
 `analyze` 接受 CBR/RAR、CBZ/ZIP、PNG、JPEG 或图片目录，按文件名中的数字排序。默认两个页线程共享模型权重；`--jobs N` 控制同时处理的页数。项目保存源路径、页内容校验值、区域坐标、擦字掩码和译文，不复制原图。分析中断后可重新运行同一命令继续；`inspect book` 输出 JSON 概况，包括已完成、部分完成、待处理、没有待翻译区域、保留原图、存在问题及受内容过滤影响的页数。诊断信息写入 stderr，`--quiet` 关闭进度输出。
 
@@ -127,13 +135,17 @@ Preserve tone and meaning; keep uncertain names in their original form for revie
 
 从字框外缘估计背景色，对局部区域做连通分析和窄颈分离，限制与格间留白连通的气泡。物理纸面与相邻对白分割后的排版区分别处理，避免把字形内的小块白色当成整段对白的背景。字形掩码独立保存；平涂气泡使用纸色众数统一填色，独立渐变旁白在背景拟合通过后连续重建纸面。缺少完整纸面轮廓的气泡文字可使用窄掩码局部插值，避开相邻未识别笔画，并用周围纸面样本检验。无法形成有效排版区域的文字保留原图、结构化 OCR 和问题原因。
 
-中文横排使用安全排版区每一行的可用区间，参考原文 OCR 字高统一页内字号，并围绕气泡主体平衡上下、左右留白。整段共用排版中轴，尾巴和与格间留白连通的开口分别参与空间约束；断行兼顾行宽、标点、孤字和字形外伸，同时保留语气停顿。中文使用 Jieba 分词辅助选择断行位置，并在本地优先保持已确认译名完整；空间不足时仍可在词内换行。内置词典来自 jieba-rs 0.11，许可证位于 `src/data/`。整页排版成功后执行擦字与绘制。字体可通过 `--font` 指定，默认优先寻找霞鹜文楷 Medium，再寻找本机中文字体。文楷可放在 `$XDG_DATA_HOME/camel/fonts/`（默认 `~/.local/share/camel/fonts/`）；字体独立于二进制加载。
+中文横排使用安全排版区每一行的可用区间，参考原文 OCR 字高统一页内字号，并围绕气泡主体平衡上下、左右留白。整段共用排版中轴，尾巴和与格间留白连通的开口分别参与空间约束；断行兼顾行宽、标点、孤字和字形外伸，同时保留语气停顿。中文使用 Jieba 分词辅助选择断行位置，并在本地优先保持已确认译名完整；空间不足时仍可在词内换行。内置词典来自 jieba-rs 0.11，许可证位于 `crates/camel/src/data/`。整页排版成功后执行擦字与绘制。字体可通过 `--font` 指定，默认优先寻找霞鹜文楷 Medium，再寻找本机中文字体。文楷可放在 `$XDG_DATA_HOME/camel/fonts/`（默认 `~/.local/share/camel/fonts/`）；字体独立于二进制加载。
 
 ## 库
 
-核心库位于 `src/`，CLI 位于 `crates/camel-cli/`。`geometry::analyze` 将调用方提供的 `TextBlock` 转为带独立擦字掩码的 `Page`，`translation::translate_page` 接受可替换的 `Translator`，`translate_missing_page` 用于补译，`layout::Typesetter` 负责字体测量与绘制。API 传输和文件管理由 CLI 承担。
+工作区的 crate 都在 `crates/` 下：
 
-`crates/camel-vision/` 提供可共享的 `Engine`、独立检测器和行识别器。`Engine::load` 加载模型，`Engine::analyze` 接受 RGB 图像并返回 `Page` 与 `AnalysisMetadata`，结果可直接交给核心库擦字、翻译和排版。
+- `crates/camel/`：核心库。`geometry::analyze` 将调用方提供的 `TextBlock` 转为带独立擦字掩码的 `Page`，`mask` 校验和修改掩码、填充与排版区，`translation::translate_page` 接受可替换的 `Translator`，`translate_missing_page` 用于补译，`layout::Typesetter` 负责字体测量与绘制，`comic::ComicSource` 从路径或任意可定位读取器读取漫画页。
+- `crates/camel-vision/`：可共享的 `Engine`、独立检测器和行识别器。`Engine::load` 加载模型，`Engine::analyze` 接受 RGB 图像并返回 `Page` 与 `AnalysisMetadata`，结果可直接交给核心库擦字、翻译和排版。
+- `crates/camel-project/`：项目文件格式与不涉及文件读写的操作，包括页面记录、原图校验、人工编辑、渲染决策和翻译计划修复；CLI 与工作台共用。
+- `crates/camel-web/`：工作台使用的 WebAssembly 接口。
+- `crates/camel-cli/`：命令行，负责文件读写和模型 API 调用。
 
 ```rust,no_run
 use camel_vision::Engine;
@@ -151,7 +163,10 @@ let (page, analysis) = engine.analyze(&image)?;
 just check
 just build
 just dist
+just web
 ```
+
+`just web` 依次构建 WebAssembly（需要 `wasm32-unknown-unknown` 目标、与 `crates/camel-web` 中版本一致的 `wasm-bindgen` CLI 和 `wasm-opt`）、前端和前端测试。
 
 全量识别和擦字评测直接读取本地图片，复用已加载的模型，擦字图在内存中校验：
 

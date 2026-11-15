@@ -1,13 +1,15 @@
 use std::{collections::BTreeSet, path::Path};
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use camel::{
     Rect,
     analysis::{SemanticSource, UnresolvedRegion},
 };
 use serde::{Deserialize, Serialize};
 
-use super::{CONTENT_FILTER_ISSUE, Record, TRANSLATION_ISSUE, read, save};
+use camel_project::{Record, edit};
+
+use super::{plan::save_edited, read};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Review {
@@ -40,12 +42,21 @@ struct Dialogue {
     translation: Option<String>,
     #[serde(deserialize_with = "deserialize_original_translation")]
     original_translation: Option<String>,
+    /// Absent leaves the size unchanged; `null` selects automatic sizing.
+    #[expect(
+        clippy::option_option,
+        reason = "absent and null differ in review files"
+    )]
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_optional_font_size"
     )]
     font_size: Option<Option<u32>>,
+    #[expect(
+        clippy::option_option,
+        reason = "absent and null differ in review files"
+    )]
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -76,6 +87,10 @@ fn deserialize_original_translation<'de, D: serde::Deserializer<'de>>(
     Option::<String>::deserialize(deserializer)
 }
 
+#[expect(
+    clippy::option_option,
+    reason = "absent and null differ in review files"
+)]
 fn deserialize_optional_font_size<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<Option<u32>>, D::Error> {
@@ -182,7 +197,9 @@ pub fn apply_review(project: &Path, input: &Path) -> Result<()> {
                         dialogue.id
                     )
                 })?;
-                if desired.is_some_and(|size| !(10..=64).contains(&size)) {
+                if desired.is_some_and(|size| {
+                    !(edit::MIN_FONT_SIZE..=edit::MAX_FONT_SIZE).contains(&size)
+                }) {
                     bail!(
                         "{} region {} font size must be between 10 and 64 pixels",
                         page.page,
@@ -236,88 +253,42 @@ pub fn apply_review(project: &Path, input: &Path) -> Result<()> {
         }
     }
     for page in review.pages {
-        let path = project.join(&page.page);
-        let mut record: Record = read(&path)?;
-        let original_preservation = (record.preserve_original, record.preserved_regions.clone());
+        let mut record: Record = read(&project.join(&page.page))?;
+        let mut preservation_changed = false;
         if let Some(preserve) = page.preserve_original {
-            record.preserve_original = preserve;
+            preservation_changed |= edit::set_page_preserved(&mut record, preserve);
         }
         for dialogue in page.regions {
+            let id = dialogue.id;
             if let Some(preserve) = dialogue.preserve_original {
-                if preserve {
-                    record.preserved_regions.insert(dialogue.id);
-                } else {
-                    record.preserved_regions.remove(&dialogue.id);
-                }
+                preservation_changed |= edit::set_region_preserved(&mut record, id, preserve)?;
             }
-            let corrected_source = record.analysis.as_ref().and_then(|analysis| {
-                analysis
-                    .regions
-                    .iter()
-                    .find(|region| region.region_id == dialogue.id)
-                    .and_then(|region| region.corrected_source.as_deref())
-            });
             let region = record
                 .page
                 .regions
-                .iter_mut()
-                .find(|r| r.block.id == dialogue.id)
+                .iter()
+                .find(|r| r.block.id == id)
                 .expect("validated dialogue id");
-            if let (Some(desired), Some(original)) =
-                (dialogue.font_size, dialogue.original_font_size)
-                && (region.font_size == original || desired != original)
-            {
-                region.font_size = desired;
-            }
-            if region.translation != dialogue.original_translation
-                && dialogue.translation == dialogue.original_translation
-            {
-                continue;
-            }
-            if let (Some(context), Some(target)) = (&mut record.context, &dialogue.translation) {
-                for pair in &mut context.recent {
-                    if pair.source == dialogue.source
-                        || corrected_source == Some(pair.source.as_str())
-                    {
-                        pair.target.clone_from(target);
-                    }
+            let font_size = match (dialogue.font_size, dialogue.original_font_size) {
+                (Some(desired), Some(original))
+                    if region.font_size == original || desired != original =>
+                {
+                    Some(desired)
                 }
+                _ => None,
+            };
+            // A concurrent change wins when this review left the translation untouched.
+            let keep_translation = region.translation != dialogue.original_translation
+                && dialogue.translation == dialogue.original_translation;
+            if let Some(size) = font_size {
+                edit::set_font_size(&mut record, id, size)?;
             }
-            if region.translation != dialogue.translation {
-                record.translation_models.remove(&dialogue.id);
+            if !keep_translation {
+                edit::set_translation(&mut record, id, dialogue.translation)?;
             }
-            region.translation = dialogue.translation;
         }
-        if record.preserve_original
-            || record.page.regions.iter().all(|region| {
-                record.preserved_regions.contains(&region.block.id)
-                    || region
-                        .translation
-                        .as_deref()
-                        .is_some_and(|text| !text.trim().is_empty())
-            })
-        {
-            record.issues.retain(|issue| {
-                !issue.starts_with(TRANSLATION_ISSUE) || issue.starts_with(CONTENT_FILTER_ISSUE)
-            });
-        }
-        let preservation_changed =
-            original_preservation != (record.preserve_original, record.preserved_regions.clone());
-        let plan = if preservation_changed {
-            if let Some(context) = &mut record.context {
-                context.scene_summary = None;
-            }
-            record.summary_invalidated = true;
-            super::plan::repaired_plan(project, &page.page, &record)?
-        } else {
-            None
-        };
-        save(&path, &record, true)?;
-        if let Some(plan) = plan {
-            super::plan::save_repaired_plan(project, &plan).context(
-                "review applied but translation plan update failed; the stale plan will be rejected",
-            )?;
-        }
+        edit::finish(&mut record, preservation_changed);
+        save_edited(project, &page.page, &record, preservation_changed)?;
     }
     Ok(())
 }

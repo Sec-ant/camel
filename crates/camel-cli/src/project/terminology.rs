@@ -1,4 +1,12 @@
-use super::*;
+//! `camel check-terms`: dialogue that may miss or contradict confirmed glossary terms.
+
+use std::{collections::BTreeMap, path::Path};
+
+use anyhow::{Context as _, Result};
+use camel::translation::Context;
+use serde_json::json;
+
+use super::{Record, read, save};
 
 fn normalized(text: &str) -> String {
     text.split_whitespace()

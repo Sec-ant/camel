@@ -14,7 +14,6 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use camel::translation::{TranslationError, Translator, VisualCrop};
-use ring::digest;
 use serde_json::{Value, json};
 use tempfile::NamedTempFile;
 
@@ -52,10 +51,10 @@ struct Failure {
 }
 
 impl Failure {
-    fn transport(error: ureq::Error) -> Self {
+    fn transport(error: &ureq::Error) -> Self {
         // Reading a JSON response can wrap a socket timeout in serde_json's
         // I/O error instead of returning ureq::Error::Timeout directly.
-        let transient = match &error {
+        let transient = match error {
             ureq::Error::Json(error) => error.is_io(),
             ureq::Error::Io(_)
             | ureq::Error::Timeout(_)
@@ -194,7 +193,7 @@ impl Remote {
     }
 
     pub fn set_task(&self, task: &str) {
-        *self.task.borrow_mut() = task.to_owned();
+        task.clone_into(&mut self.task.borrow_mut());
     }
     pub fn model_used(&self) -> String {
         self.model_used.borrow().clone()
@@ -243,10 +242,10 @@ impl Remote {
         Ok(())
     }
 
-    fn request(&self, system: &str, content: Value) -> Result<String, TranslationError> {
+    fn request(&self, system: &str, content: &Value) -> Result<String, TranslationError> {
         self.pending.borrow_mut().take();
         self.cached_response.borrow_mut().take();
-        let primary = self.request_with_retries(&self.model, system, &content);
+        let primary = self.request_with_retries(&self.model, system, content);
         let (model, result) = match primary {
             Err(error) if error.fallback && self.fallback_model.is_some() && !self.stopped() => {
                 let model = self.fallback_model.as_deref().expect("configured fallback");
@@ -262,7 +261,7 @@ impl Remote {
                 {
                     (self.model.as_str(), Err(error))
                 } else {
-                    (model, self.request_with_retries(model, system, &content))
+                    (model, self.request_with_retries(model, system, content))
                 }
             }
             result => (self.model.as_str(), result),
@@ -400,7 +399,7 @@ impl Remote {
             .post(&self.endpoint)
             .header("Authorization", format!("Bearer {}", self.key))
             .send_json(payload)
-            .map_err(Failure::transport)?;
+            .map_err(|error| Failure::transport(&error))?;
         if !response.status().is_success() {
             return Err(Failure::status(
                 response.status().as_u16(),
@@ -413,7 +412,7 @@ impl Remote {
         let value: Value = response
             .body_mut()
             .read_json()
-            .map_err(Failure::transport)?;
+            .map_err(|error| Failure::transport(&error))?;
         *self.usage.borrow_mut() = value.get("usage").cloned();
         if !self.quiet
             && let Some(usage) = value.get("usage")
@@ -477,27 +476,24 @@ fn write_cache(path: &Path, response: &str) -> Result<()> {
 }
 
 fn cache_key(endpoint: &str, key: &str, payload: &Value) -> String {
-    struct HashWriter(digest::Context);
+    use sha2::Digest as _;
+    struct HashWriter(sha2::Sha256);
     impl std::io::Write for HashWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.update(bytes);
-            Ok(bytes.len())
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.update(buf);
+            Ok(buf.len())
         }
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-    let mut hash = HashWriter(digest::Context::new(&digest::SHA256));
+    let mut hash = HashWriter(sha2::Sha256::new());
     for part in ["camel-translation-cache-v1", endpoint, key] {
-        hash.0.update(&(part.len() as u64).to_be_bytes());
+        hash.0.update((part.len() as u64).to_be_bytes());
         hash.0.update(part.as_bytes());
     }
     serde_json::to_writer(&mut hash, payload).expect("hashing JSON cannot fail");
-    let mut result = String::with_capacity(69);
-    for byte in hash.0.finish().as_ref() {
-        use std::fmt::Write as _;
-        write!(result, "{byte:02x}").expect("writing to a string cannot fail");
-    }
+    let mut result = camel_project::hex(&hash.0.finalize());
     result.push_str(".json");
     result
 }
@@ -512,7 +508,7 @@ impl Translator for Remote {
     }
 
     fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError> {
-        self.request(system, Value::String(input.into()))
+        self.request(system, &Value::String(input.into()))
     }
 
     fn complete_with_image(
@@ -523,7 +519,7 @@ impl Translator for Remote {
     ) -> Result<String, TranslationError> {
         self.request(
             system,
-            json!([
+            &json!([
                 {"type":"text", "text":input},
                 {"type":"image_url", "image_url":{
                     "url":format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg))
@@ -549,7 +545,7 @@ impl Translator for Remote {
             );
             content.push(json!({"type":"image_url", "image_url":{"url":format!("data:image/jpeg;base64,{}", STANDARD.encode(&crop.jpeg))}}));
         }
-        self.request(system, Value::Array(content))
+        self.request(system, &Value::Array(content))
     }
 }
 
@@ -566,11 +562,11 @@ mod tests {
             }
         }
         let timeout = serde_json::from_reader::<_, serde_json::Value>(Timeout).unwrap_err();
-        let failure = Failure::transport(ureq::Error::Json(timeout));
+        let failure = Failure::transport(&ureq::Error::Json(timeout));
         assert!(failure.retryable && failure.fallback);
 
         let malformed = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
-        let failure = Failure::transport(ureq::Error::Json(malformed));
+        let failure = Failure::transport(&ureq::Error::Json(malformed));
         assert!(!failure.retryable && !failure.fallback);
     }
 }

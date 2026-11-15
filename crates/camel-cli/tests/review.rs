@@ -23,6 +23,10 @@ fn cli() -> Command {
     command
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "callers pass command output inline"
+)]
 fn success(output: Output) {
     assert!(
         output.status.success(),
@@ -56,17 +60,9 @@ fn project() -> TempDir {
         RgbImage::from_pixel(200, 120, Rgb([255; 3]))
             .save(dir.path().join(&source_path))
             .unwrap();
-        let hash = ring::digest::digest(
-            &ring::digest::SHA256,
-            &fs::read(dir.path().join(&source_path)).unwrap(),
-        );
-        let source_path = format!(
-            "@{}:{}",
+        let source_path = camel_project::source::page_reference(
             number - 1,
-            hash.as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
+            &fs::read(dir.path().join(&source_path)).unwrap(),
         );
         let block = json!({"id":id,"bounds":bounds,"words":[{"text":source,"bounds":bounds,"confidence":93.25,"line":3}],"text":source});
         let record = json!({
@@ -374,9 +370,10 @@ fn manual_edits_clear_only_changed_dialogue_model_provenance() {
 #[test]
 #[ignore = "requires a Chinese font; set CAMEL_TEST_FONT"]
 fn reviewed_dialogue_renders_without_credentials_or_api_calls() {
-    let font = std::env::var_os("CAMEL_TEST_FONT")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| "/System/Library/Fonts/Supplemental/Songti.ttc".into());
+    let font = std::env::var_os("CAMEL_TEST_FONT").map_or_else(
+        || "/System/Library/Fonts/Supplemental/Songti.ttc".into(),
+        std::path::PathBuf::from,
+    );
     let dir = project();
     let (review_path, mut review) = export(dir.path());
     review["pages"][0]["regions"][0]["translation"] = json!("嗨，马克！");

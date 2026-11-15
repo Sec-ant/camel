@@ -55,9 +55,14 @@ pub(crate) fn analyze(
             })
             .collect();
         for handle in handles {
-            handle
-                .join()
-                .map_err(|_| anyhow::anyhow!("analysis thread panicked"))??;
+            handle.join().map_err(|payload| {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("unknown panic");
+                anyhow::anyhow!("analysis thread panicked: {message}")
+            })??;
         }
         Ok(())
     })

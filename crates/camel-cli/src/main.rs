@@ -12,6 +12,11 @@ use std::{
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
+/// Page analysis and layout allocate many short-lived spans and buffers across
+/// worker threads; mimalloc keeps that path fast without code changes.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "camel",
@@ -20,6 +25,7 @@ use clap::{Args, Parser, Subcommand};
     after_help = "Examples:\n  camel analyze pages/ -o book\n  camel translate book --model MODEL --base-url URL\n  camel export book -o translated/ --font comic.ttf"
 )]
 struct Cli {
+    #[expect(clippy::doc_markdown, reason = "clap prints help text verbatim")]
     /// Configuration file; defaults to $XDG_CONFIG_HOME/camel/config.json.
     #[arg(long, env = "CAMEL_CONFIG", global = true)]
     config: Option<PathBuf>,
@@ -39,6 +45,7 @@ enum Command {
         /// Project directory to create or resume.
         #[arg(short, long)]
         output: PathBuf,
+        #[expect(clippy::doc_markdown, reason = "clap prints help text verbatim")]
         /// Model directory; defaults to $XDG_DATA_HOME/camel/models or ~/.local/share/camel/models.
         #[arg(long, env = "CAMEL_MODELS")]
         models: Option<PathBuf>,
@@ -131,14 +138,6 @@ enum Command {
     RepairRegion { project: PathBuf, request: PathBuf },
     /// Remove a manually reviewed false OCR region.
     RemoveRegion { project: PathBuf, request: PathBuf },
-    /// Read and edit a project in a local browser.
-    Serve {
-        /// Project containing recognition and translations.
-        project: PathBuf,
-        /// Original comic, if it has moved since the project was created.
-        #[arg(long)]
-        source: Option<PathBuf>,
-    },
     /// Export translated pages or pages with source lettering erased.
     Export {
         /// Project to export.
@@ -278,17 +277,18 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let jobs = jobs
                 .or(config.translation.jobs)
-                .map(std::num::NonZeroUsize::get)
-                .unwrap_or(1);
+                .map_or(1, std::num::NonZeroUsize::get);
             project::translate(
                 &project,
                 &service.resolve(config.translation)?,
-                glossary.as_deref(),
-                context_from.as_deref(),
-                cli.quiet,
-                continue_on_error,
-                cache,
-                jobs,
+                project::TranslateOptions {
+                    glossary: glossary.as_deref(),
+                    context_from: context_from.as_deref(),
+                    quiet: cli.quiet,
+                    continue_on_error,
+                    cache,
+                    jobs,
+                },
             )
         }
         Command::Prepare {
@@ -298,8 +298,7 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let jobs = jobs
                 .or(config.translation.jobs)
-                .map(std::num::NonZeroUsize::get)
-                .unwrap_or(1);
+                .map_or(1, std::num::NonZeroUsize::get);
             project::prepare(
                 &project,
                 &service.resolve(config.translation)?,
@@ -318,7 +317,7 @@ fn run(cli: Cli) -> Result<()> {
             &service.resolve(config.translation)?,
             cli.quiet,
             &output,
-            jobs.map(std::num::NonZeroUsize::get).unwrap_or(1),
+            jobs.map_or(1, std::num::NonZeroUsize::get),
             &skip_pages,
         ),
         Command::CheckTerms { project, output } => project::check_terms(&project, &output),
@@ -336,9 +335,6 @@ fn run(cli: Cli) -> Result<()> {
         Command::ApplyReview { project, review } => project::apply_review(&project, &review),
         Command::RepairRegion { project, request } => project::repair_region(&project, &request),
         Command::RemoveRegion { project, request } => project::remove_region(&project, &request),
-        Command::Serve { source, project } => {
-            project::serve(&project, source.as_deref(), config.font.as_deref())
-        }
         Command::Export {
             project,
             output,

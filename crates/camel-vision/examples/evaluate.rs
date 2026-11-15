@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
         for handle in handles {
-            handle.join().map_err(|_| "worker panicked")??;
+            handle.join().map_err(|_payload| "worker panicked")??;
         }
         Ok::<_, String>(())
     })?;

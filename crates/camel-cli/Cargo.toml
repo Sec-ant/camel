@@ -1,9 +1,11 @@
 [package]
 name = "camel-cli"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.94"
-publish = false
+description = "Command-line comic translation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [[bin]]
 name = "camel"
@@ -11,22 +13,26 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-camel = { path = "../.." }
-camel-vision = { path = "../camel-vision" }
-clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "env"] }
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
-serde_json = "1"
-serde = { version = "1", features = ["derive"] }
-ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
-anyhow = "1"
-tempfile = "3"
-base64 = "0.22"
-ring = "0.17"
-tiny_http = "0.12"
-zip = { version = "7.2", default-features = false, features = ["deflate-flate2"] }
+anyhow = { workspace = true, features = ["std"] }
+base64 = { workspace = true, features = ["std"] }
+camel.workspace = true
+camel-project.workspace = true
+camel-vision.workspace = true
+clap = { workspace = true, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "env"] }
+image = { workspace = true, features = ["png", "jpeg"] }
+mimalloc.workspace = true
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+tempfile.workspace = true
+ureq = { workspace = true, features = ["rustls", "json"] }
+zip = { workspace = true, features = ["deflate-flate2"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
-rustix = { version = "1", features = ["fs"] }
+rustix = { workspace = true, features = ["std", "fs"] }
 
-[lints.rust]
-unsafe_code = "forbid"
+[dev-dependencies]
+tiny_http.workspace = true
+
+[lints]
+workspace = true
