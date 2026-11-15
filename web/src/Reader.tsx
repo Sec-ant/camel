@@ -5,7 +5,7 @@ import { defaultWorkers, jobRunning, jobVersion, runAnalysis } from "./pipeline/
 import { reader, storedComic } from "./reader.ts";
 import { Session } from "./session.ts";
 import { start } from "./state.ts";
-import { cachedModels, downloadModels, ProjectFiles, rememberedFont, saveFont } from "./storage/files.ts";
+import { cachedModels, chooseFont, chooseModels, downloadModels, ProjectFiles, rememberedFont, saveFont } from "./storage/files.ts";
 import { DirectoryStore } from "./storage/store.ts";
 
 export function ReaderScreen() {
@@ -16,6 +16,7 @@ export function ReaderScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(true);
+  const [options, setOptions] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
     void current.directory.then(() => { if (active) setSaving(false); }).catch((reason: unknown) => {
@@ -83,6 +84,18 @@ export function ReaderScreen() {
         <button class="button" disabled={page + 1 === current.pages.length} onClick={() => setPage(page + 1)}>Next</button>
         <button class="button inverse" disabled={busy} onClick={() => void analyze()}>{busy ? "Preparing…" : "Analyze and edit"}</button></div>
     </div>
+    <details class="reader-options">
+      <summary>Analysis options</summary>
+      <div class="buttons">
+        <button class="button" type="button" disabled={busy} onClick={() => void chooseModels().then((models) => {
+          if (models) setOptions("Custom models selected");
+        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>Choose models…</button>
+        <button class="button" type="button" disabled={busy} onClick={() => void chooseFont().then((font) => {
+          if (font) setOptions(`Font: ${font.name}`);
+        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>Choose font…</button>
+        <span class="helper">{options ?? "Defaults are used unless you choose your own."}</span>
+      </div>
+    </details>
     {error && <p class="alert reader-error">{error}</p>}
     <main class="reader-page">{image ? <img src={image} alt={`Page ${page + 1}`} /> : <p>Loading page…</p>}</main>
     {busy && <div class="reader-job"><JobView /></div>}
