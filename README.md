@@ -1,8 +1,41 @@
 # camel
 
-Rust 漫画翻译库与 CLI。图片处理在本地执行，翻译通过兼容 Chat Completions 的 API 完成。字体和模型独立于程序安装。
+A manga translation toolkit written in Rust, with a CLI and a browser workbench. The same libraries handle OCR, balloon geometry, text removal, translation, and typesetting. The workbench runs them through WebAssembly and lets you correct the results by hand.
 
-可将常用设置放在 `$XDG_CONFIG_HOME/camel/config.json`（默认 `~/.config/camel/config.json`），或通过 `--config` 指定。命令行参数及对应环境变量优先于配置文件；配置中的相对路径以配置文件所在目录为基准。
+Image processing runs locally. Translation and review use a Chat Completions service you configure: visual mode sends page images alongside dialogue; text-only mode sends text. Fonts, recognition models, and API credentials are configured separately.
+
+[![The Camel workbench with a page preview, selected balloon, and editable dialogue](assets/workbench.png)](assets/workbench.png)
+
+The sample shows an English comic translated into Simplified Chinese. Comic artwork is from *Invincible* and belongs to its respective rights holders. Click any screenshot to view it at full resolution.
+
+## Quick start
+
+Install Rust (the minimum version is declared in `Cargo.toml`) and [just](https://github.com/casey/just). Prepare the recognition models listed below and a font that covers your target language.
+
+```sh
+just install
+camel analyze comic.cbz -o book --models /path/to/models
+camel translate book --base-url https://example.com/v1 --model your-model
+camel check-layout book -o layout.json --font /path/to/comic.ttf
+camel export book -o translated.cbz --font /path/to/comic.ttf
+```
+
+Supply credentials through `CAMEL_API_KEY` or the separate key file described below. `analyze` creates a project; `translate` saves progress page by page and resumes unfinished work. Review the result in the workbench or with `review` / `apply-review` before exporting. Run `camel <command> --help` for the full command reference.
+
+The browser workbench also needs Node.js (tested with v26), `wasm-bindgen-cli`, and Binaryen's `wasm-opt`:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+# Install Binaryen and make wasm-opt available on PATH.
+just web-dev
+```
+
+Open http://localhost:5173. The `wasm-bindgen-cli` version must match `wasm-bindgen` in `Cargo.toml`. For a production build, run `just web` and serve `web/dist/` over HTTPS; localhost also provides the secure context needed by browser storage APIs. The workbench is designed for desktop windows. Use **Pages** to collapse the page list when space is limited.
+
+## Configuration
+
+Common settings belong in `$XDG_CONFIG_HOME/camel/config.json`, defaulting to `~/.config/camel/config.json`. Use `--config` to choose another file. Command-line options and their environment variables take precedence; relative paths in the configuration are resolved from its directory.
 
 ```json
 {
@@ -20,100 +53,97 @@ Rust 漫画翻译库与 CLI。图片处理在本地执行，翻译通过兼容 C
 }
 ```
 
-`translation` 还可设置 `fallback_model` 和 `api_key_file`。API 密钥保存在独立文件中，默认读取同一配置目录下的 `api-key`；也可通过 `CAMEL_API_KEY` 提供。
+The `translation` object also accepts `fallback_model` and `api_key_file`. Keep the API key in a separate file: by default, `api-key` next to `config.json`. You can instead use `CAMEL_API_KEY` or `--api-key-file`. The service URL, model, and font also accept `CAMEL_BASE_URL`, `CAMEL_MODEL`, and `CAMEL_FONT`.
 
-## 使用
+### Recognition models and fonts
 
-安装 Rust，准备下表中的模型和中文字体，然后运行：
+Place these ONNX files in one directory:
 
-```sh
-just install
-camel analyze comic.cbr -o book --models models/
-camel translate book \
-  --base-url https://token-plan-cn.xiaomimimo.com/v1 \
-  --model mimo-v2.6-pro
-camel export book -o translated.cbz --font /path/to/comic.ttf
-```
-
-## 网页工作台
-
-工作台是纯静态网页，核心库和识别模型编译为 WebAssembly 在浏览器的 Web Worker 中运行，不需要后台服务。`just web-dev` 构建后在 http://localhost:5173 打开；构建产物 `web/dist/` 也可放在任意静态托管上。CLI 和工作台使用同一套流水线代码，两边可以交替处理同一个项目。
-
-**新建项目**：选择原漫画（CBZ/ZIP、CBR/RAR 文件或图片目录）、空的项目目录、模型目录（`detector.onnx` 和 `recognizer.onnx`，首次选择后缓存在浏览器中）和 Worker 数（默认为 CPU 核数减一，最多 4 个），即可在浏览器中分析。分析中断后再次运行会跳过已完成的页面。浏览器中的识别结果与 CLI 不逐字节一致：两者的模型推理浮点运算不同，置信度和坐标会有细微差异，个别难读文字的识别结果也可能不同。因此两边不能互相续跑分析，会提示来源、模型或程序已变化。
-
-**设置**：服务地址、模型、备用模型、目标语言、纯文本模式、提示词模板与变量、服务商请求字段、并发数和缓存开关，可以导入或导出 CLI 的 `config.json`。API 密钥只保存在当前浏览器中，不写入项目。服务需要允许浏览器跨域请求；MiMo Token Plan 已经允许。
-
-**任务**：在页面中运行场景规划、翻译、审校、术语检查、排版检查和导出，参数与对应的 CLI 命令相同，并显示进度、预计剩余时间、逐页状态和日志，可以随时取消，下次运行时继续。审校和术语检查的报告保存在项目的 `reports/` 下，各条建议显示在对应页面的检查器中，可一键采用。导出可生成 CBZ、PNG 目录或擦字图（可附掩码）。长任务运行期间需保持页面打开。
-
-**校对**：打开已有项目时选择项目目录、原漫画和中文字体。每页读取时按项目记录核对原图内容，选错漫画会直接提示。工作台可以：
-
-- 逐页查看原图、擦字和成品三种画面，叠加区域编号、擦除掩码、排版区、OCR 词框、未识别候选和字形；预览与 `camel export --allow-partial` 的结果一致，并列出保留原文的区域及原因。
-- 修改译文（`\n` 为手动换行）、校正 OCR 原文、设置字号，标记区域或整页保留原文。
-- 用画笔增减擦除掩码和排版区，改用纯色填充（可吸取页面颜色），框选新建区域、把未识别候选转为区域、删除误识别区域。
-- 每页撤销/重做；改动原文、保留标记或区域增删时，同步更新翻译检查点、上下文和 `translation-plan.json`。
-
-Chromium 内核浏览器（Chrome、Edge 等）直接读写项目目录，并在几秒内显示 `camel translate` 等外部写入；两边改动同一页时，后写入的一方会发现冲突，工作台重新载入该页，`translate` 保留工作台的改动，该页留待下次补译。Firefox 和 Safari 以只读方式载入已有项目，改动保存在浏览器中，用“Download changes”下载只含改动文件的 zip，解压覆盖到项目目录；在这两种浏览器中新建的项目保存在浏览器存储中，可用“Download project”下载。
-
-`analyze` 接受 CBR/RAR、CBZ/ZIP、PNG、JPEG 或图片目录，按文件名中的数字排序。默认两个页线程共享模型权重；`--jobs N` 控制同时处理的页数。项目保存源路径、页内容校验值、区域坐标、擦字掩码和译文，不复制原图。分析中断后可重新运行同一命令继续；`inspect book` 输出 JSON 概况，包括已完成、部分完成、待处理、没有待翻译区域、保留原图、存在问题及受内容过滤影响的页数。诊断信息写入 stderr，`--quiet` 关闭进度输出。
-
-识别算法更新后，可用 `camel refresh book new-analysis -o updated-book` 合并新识别结果与已有译文。命令按原文或校正后的原文及位置对应区域，保留匹配的译文和上下文；无法匹配的旧译文写入 `unmatched-translations.json`，供审校使用。
-
-将下列 ONNX 文件放入同一目录。模型目录依次取自 `--models`、`CAMEL_MODELS`、`$XDG_DATA_HOME/camel/models`；未设置 XDG 数据目录时使用 `~/.local/share/camel/models`。
-
-| 文件名 | 模型 |
+| File | Model |
 | --- | --- |
-| `detector.onnx` | [comic-text-and-bubble-detector 的 detector-v4-s_int8](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) |
-| `recognizer.onnx` | [RapidOCR 的 en_PP-OCRv5_rec_mobile](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml)，含内嵌字符字典 |
+| `detector.onnx` | [comic-text-and-bubble-detector, detector-v4-s_int8](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) |
+| `recognizer.onnx` | [RapidOCR, en_PP-OCRv5_rec_mobile](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml), including its embedded character dictionary |
 
-检测与英文识别通过 RTen 在 Rust 进程内执行。模型独立于二进制安装，加载失败时报告所需文件及目录。`analysis.visual_detections` 保留检测结果，`analysis.ocr_engine` 标注识别分数的来源。对易混淆的首字形，识别结果结合本页其他字形比对；原始 OCR 保留在 `analysis.initial_ocr`，修正后的文字进入页面区域。
+The model directory is selected from `--models`, `CAMEL_MODELS`, or `$XDG_DATA_HOME/camel/models`, in that order. Without an XDG data directory, the default is `~/.local/share/camel/models`. Detection and English recognition run through RTen. Models are installed separately from the executable; loading errors identify the required files and directory.
 
-检测到文字但未能分行时，会尝试对整块区域补充识别；所得候选保存在 `analysis.ocr_alternatives`，与原检测坐标关联。此结果未经其他识别结果印证，不自动用于擦字或翻译。
+Use `--font` to choose a typeface. For Chinese output, automatic discovery prefers LXGW WenKai Medium, then other installed Chinese fonts. You can place WenKai in `$XDG_DATA_HOME/camel/fonts/`, defaulting to `~/.local/share/camel/fonts/`. Fonts are loaded separately from the binary.
 
-`analysis.ocr_observations` 将原始文字检测 `detection_id`、分行坐标 `lines` 和阅读排序后的 `initial_ocr` 块 `block_id` 关联起来。分行已找到但未读出的行仍保留坐标；逐词的 `line` 对应此处的行索引。没有形成初始 OCR 块时省略 `block_id`。去重后移除的观察仍可追溯，待处理区域通过 `detection_id` 指回原始检测框。
+## Browser workbench
 
-气泡内没有文字检测框时，会检查气泡中的文字线。三个独立、对齐的点可识别为省略号，所对应的行索引保存在 `ocr_observations[].geometric_lines`，其词置信度为 0，表示没有模型分数。
+The workbench is a static web application. Rust code and recognition models run in Web Workers through WebAssembly; no application server is required. The CLI and workbench share the project format and pipeline, so you can use both on the same project.
 
-`export --clean` 输出清除原文后的图片；目录输出包含 PNG 和同名 JSON，`.cbz` 输出为漫画文件。这些文件可用于检查掩盖效果、手工填字或交给其他排版工具。目录输出可通过 `--mask-output` 另外输出黑白掩码：白色像素是擦除区域，黑色像素保持原样。擦字导出只需要分析结果。重跑时会复用与当前结果完全相同的文件并补齐缺失文件；遇到内容不同的已有文件会保留并提示。图像尺寸与原图一致，区域坐标可以直接复用。`export` 默认使用同一份掩码擦字，再排入项目中的译文；输出路径以 `.cbz` 结尾时逐页写入 CBZ，否则写入图片目录。重跑时保留内容完全相同的已生成图片和报告，补齐缺失文件；内容不同则提示。
+**New project.** Choose a CBZ/ZIP or CBR/RAR archive, or a folder of page images; select a destination, the model directory, a font, and the worker count. Models are cached in browser storage after the first selection. The default worker count is one less than the CPU count, capped at four. An interrupted analysis skips completed pages when resumed with the same inputs.
 
-程序也可以通过 `geometry::prepare_erase(&original, &bubble)?.layer()` 按区域生成透明 RGBA 擦字图层及其原图坐标；叠回原图的效果与直接擦字一致。图层按需在内存中生成，项目仍以原图、掩码和背景重建参数为准。
+Browser and native inference can differ slightly in floating-point results, confidence scores, coordinates, and difficult OCR. Resume an analysis in the environment that started it: switching between the CLI and browser changes the analysis build identity.
 
-Rust 库的 `comic::ComicSource` 可直接读取图片目录、CBZ/ZIP 和 CBR/RAR 中的单页。
+**Settings.** Configure the service URL, preferred and fallback models, target language, text-only mode, prompt template and variables, provider options, concurrency, and response caching. Import or export the CLI's `config.json`. The API key stays in this browser and is excluded from project files and exported configuration. The service must allow cross-origin browser requests. URLs must use HTTPS, except for local HTTP services on localhost or loopback addresses.
 
-JSON 使用原图像素坐标，原点在左上角，矩形右边和下边为开区间。`page.regions` 保存原文、逐词坐标与置信度、译文和背景色。其中 `bubble.glyphs` 是原文字形掩码，`bubble.erase` 是实际擦除区，`bubble.interior` 是检测估计的安全排版区。渐变纸面另存 `background_model` 或 `background_repair`，供擦字与排版从原图重建相同背景。`analysis` 保存有序画格、对白与画格关联、几何处理前的 OCR，以及安全排版区的闭合像素轮廓（可含孔洞和分离区域）；这些轮廓不是气泡外沿的精确描边。`analysis.unresolved_regions` 保存待处理文字的逐词坐标、置信度和原因。模型修正原文、说话者描述和场景摘要另存，并注明来源。
+[![Translation service, prompt, and run settings](assets/settings.png)](assets/settings.png)
 
-`interior` 和 `erase` 中的水平像素段以 `[y, start, end]` 存储，`end` 为开区间。字形掩码 `glyphs` 较为密集，按坐标分别做差分、ZigZag 和变长整数编码，再以 zlib 压缩、Base64 表示；空掩码省略。
+**Jobs.** Run scene planning, translation, audit, terminology checks, layout checks, and export. Each job shows progress, estimated time remaining, page states, and a log. You can cancel a job and resume unfinished work later. Audit and terminology reports are saved under `reports/`; suggestions appear beside the relevant region and can be applied individually. Export to CBZ, PNG pages, or erased pages with optional masks. Keep the tab open while a job runs.
 
-局部纸面重建在 `background_repair.method` 中标记为 `harmonic_local_v1`；该区域的原图、擦除掩码和排版区均可用于人工检查。
+[![A completed layout check with page progress and a log](assets/jobs.png)](assets/jobs.png)
 
-API 密钥从 `CAMEL_API_KEY` 或 `~/.config/camel/api-key` 读取。可用 `--api-key-file` 指定其他文件。Base URL、模型、字体分别支持 `CAMEL_BASE_URL`、`CAMEL_MODEL`、`CAMEL_FONT`。MiMo Token Plan 的地址以控制台提供的 OpenAI 兼容地址为准。
+**Editing.** Open a project folder with its original comic and font. The workbench checks page contents against their recorded hashes and reports a mismatched comic. You can:
 
-翻译按页保存。重新执行同一命令会恢复术语表和前文，只补译 `null` 或空白台词；已有译文作为同页上下文保留。默认向视觉模型发送长边最多 1600 像素的页面 JPEG、原图尺度的区域坐标、当前页对白、下一页原文预览，以及最近的翻译和场景摘要；整页缩小后难以辨认的文字会附带标明区域的原图局部，每次最多六处。原文忽略英文大小写和多余空白后相同时，也提供少量先前译法作为参考，由模型结合当前语境决定是否复用。`--text-only` 使用纯文本模型。返回内容经过区域 ID 和术语格式校验后一起落盘。项目引用原漫画文件，不复制原图。
+- Compare the original, erased, and final page. Overlay region numbers, erase masks, layout areas, OCR words, unresolved candidates, and glyphs. Previews use the same partial-render behavior as `camel export --allow-partial` and explain why lettering was retained.
+- Edit translations, insert manual line breaks, correct OCR text, set font sizes, or keep a region or whole page in its original form.
+- Paint erase masks and layout areas, choose a flat fill or sample a color, draw a new region, promote an unresolved candidate, remove a false detection, or **Dismiss** a candidate. Dismissed candidates leave the to-do count and can be restored with Undo.
+- Undo and redo changes per page. Changes to source text, preservation flags, or region membership also update translation checkpoints, context, and `translation-plan.json`.
 
-默认不写入翻译响应缓存。需要复用完全相同的请求时可使用 `--cache`；缓存位于项目的 `.cache/translation/`，不保存请求或密钥。
+Chromium browsers such as Chrome and Edge can write directly to a chosen project directory. External changes, including those made by `camel translate`, appear within seconds. Writes check the file revision: a concurrent edit is preserved and reported instead of being overwritten. Failed writes keep undo/redo history; external changes invalidate stale history for that page.
 
-临时网络错误及 HTTP 408/429/500/502/503/504 每个模型最多尝试三次；短 `Retry-After` 会被遵守，超过 30 秒或日期形式的服务端等待要求则结束本次运行，之后可继续。可用 `--fallback-model mimo-v2.6-flash`（或 `CAMEL_FALLBACK_MODEL`）指定备用模型；首选模型重试耗尽或返回长度截断状态时使用。服务明确返回内容过滤时记录拒绝，不切换备用模型。认证错误、重定向和内容校验失败会直接报错。每页仍优先使用 `--model`；`translation_models` 逐条记录实际产出译文的模型，人工改动或清空该条台词后移除对应记录。未通过校验的回复不写入项目。
+Firefox and Safari read existing projects as snapshots. Edits stay in browser storage until you select **Download changes** and unpack the zip over the project directory. New projects in these browsers also live in browser storage; use **Download project** to save them to disk.
 
-服务商特有的请求字段可放在配置文件的 `translation.request_options` 中。例如，支持该字段的 MiMo 模型可使用 `{"thinking":{"type":"disabled"}}` 关闭深度思考；这通常会减少延迟和输出 token，但可能影响复杂页面的理解质量。
+A WASM panic or trap ends the affected worker and displays its error. The next operation creates a new worker; the page engine also restores the selected comics and font.
 
-翻译时可加 `--continue-on-error`：模型回复的内容或区域 ID 校验失败时，先重试一次该页；仍失败则记录问题并继续后续页面。临时服务错误在重试耗尽后也会标记当前页并继续；连续三页遇到临时服务错误、认证失败或服务要求较长等待时停止。服务明确拒绝时记录受影响的页面，继续处理时隔离相关页面和旧上下文。已有译文可继续使用；尚未完成的页面会在结果中报告。本次命令有未完成页面时返回非零状态，普通校验及临时错误可重新运行补译。
+## CLI workflow
 
-译文与原文完全相同时直接保留原图中的文字，避免无意义的擦除和重绘。识别到文字但无法生成字形掩码时保留原图并记录原因。需要先导出尚未全部翻译的项目时，可在 `export` 后加 `--allow-partial`：缺译或无法排版的文字保留原文；若其他气泡的擦除或排版区与保留区域相交，也保留对应原文。其他无法排版的情况保留整页原图。内容过滤历史写入报告，页面已有的译文照常处理；缺译区域按上述规则处理。这些情况会输出警告，并在输出目录的 `render-report.json` 中记录逐页、逐区域的原因；CBZ 输出时默认使用旁边的 `<漫画名>.report.json`；可通过 `--report` 指定其他报告路径。
+### Analyze and inspect
 
-已确认译名可以通过 `translate --glossary terms.json` 提供，例如 `{"Omni-Man":"全能侠"}`。术语表保存为项目内的 `glossary.json`，后续翻译自动读取，优先于模型建议和旧上下文；模型新提议另存为 `proposed_terms`；若建议与确认译名冲突，保留确认译名和对白，并在页面记录和运行日志中提示，供后续审校。每次请求仅发送当前页、后页预览和前文相关的术语，无关词条不占请求空间；可选部分合计最多 4096 字符，当前页命中的确认译名全部带入。更新术语用于后续请求，已有译文通过 `review` 审校修改。
+`analyze` accepts CBR/RAR, CBZ/ZIP, PNG, JPEG, or an image directory, using natural filename order. Two page workers share model weights by default; `--jobs N` controls concurrency. Projects store source references, page hashes, regions, masks, and translations without copying the original images. Run the same command again to resume an interrupted analysis.
 
-可运行 `camel check-terms book -o terms-review.json`，在本地根据项目中的 `glossary.json` 检查已译对白。报告列出原文匹配词条但译文保留原文或缺少确认译名的候选，包括页名、区域 ID、原文、译文、词条及预期译名；明确保留的页面和区域不参与检查。普通词义、自然省略和识别错误等可能产生误报或漏报，需结合上下文核对后再用 `review` 和 `apply-review` 修改译文。发现候选时命令仍正常退出，也不影响导出；报告不会覆盖已有文件。
+`camel inspect book` prints JSON summaries of completed, partial, pending, empty, preserved, issue-bearing, and content-filter-affected pages. Diagnostics go to stderr; `--quiet` suppresses progress output.
 
-需要并发翻译时使用 `camel translate book --jobs 3`，也可在配置的 `translation.jobs` 中设置；默认仍为顺序翻译。首次并发处理会使用 OCR 原文生成 `translation-plan.json`，也可提前运行 `camel prepare book`，检查或调整场景分组与摘要。规划按有界文本批次处理，并使用相同的并发数；独立运行时可用 `camel prepare book --jobs 3`。跨批连续的场景会合并；场景之间并发、场景内部逐页顺序执行。分组和摘要是模型对原文的推断，跨场景请求不会等待前一场景的新译文，适合在审校时核对场景衔接。通过审校和区域修复命令更改保留标记或原文时，相关场景计划会同步更新；译文修改不会使计划失效。各场景持有独立上下文，跨场景候选译名冲突记录到页面 `issues`，供后续审校。续跑时按顺序恢复同场景内未受过滤影响的已译对白，遇到过滤标记页清空上下文；旧检查点中来源不明的候选词不参与恢复。
+After an OCR algorithm update, `camel refresh book new-analysis -o updated-book` merges new recognition results with existing translations. It matches regions by original or corrected source text and position, preserves matching translations and context, and writes unmatched translations to `unmatched-translations.json` for review.
 
-每次服务请求的耗时、实际模型、尝试次数、缓存命中、用量和错误写入项目的 `translation-metrics.jsonl`；日志不保存请求正文、图像或 API 密钥。`elapsed_ms` 是单次 API 尝试的总耗时，不含页图准备和保存，也不区分服务排队与模型生成。
+### Translate and resume
 
-初译后可运行 `camel audit book -o audit.json`，按场景组织双语审校，每组最多四页，并附邻页原文；可用 `--jobs 3` 并发审校，默认按顺序审校；若翻译使用自定义提示词，可通过 `--prompt prompt.txt` 让审校参考相同的翻译策略。没有计划时按相邻页面分组。审校只报告有原文依据的问题，将建议保存在 `audit_issues`；`pages[].regions[].translation` 保留当前译文。核对建议后，将接受的文字填到相应 `translation`，再运行 `camel apply-review book audit.json`。导入沿用原文、区域 ID 和修改冲突检查。已通过校验的审校响应缓存可在失败后复用。审校收到内容过滤时会记录相关页面并跳过可能包含相同内容的后续组；可通过重复使用 `--skip-page` 显式排除页面。审校回复两次校验失败时继续检查其他组，并将失败页面写入部分报告；命令返回错误，提示使用新的输出路径重跑失败组。审校请求有总字符上限；超大页面会明确报错，不截掉被审台词。
+Translations are saved per page. Repeating the command restores terminology and context, then translates only null or blank dialogue. Existing translations remain available as same-page context.
 
-排版前可运行 `camel check-layout book -o layout.json`（可加 `--font comic.ttf`）。它使用与导出相同的字体、词组提示、原文字高和气泡形状，报告字号、放不下、缺字、缺译及重叠等问题；有内容过滤历史的页面同样检查已有译文，历史原因保留在报告中；源图等实际错误仍会使命令失败。可以据此只精简放不下的气泡，核对原意后重新检查；最终成图仍需核对擦字和画面效果。审校与排版报告均不覆盖已有输出文件。
+Visual mode sends a JPEG scaled to at most 1600 pixels on its longest side, region coordinates in original image pixels, current dialogue, a preview of the next page's source text, recent dialogue, and scene summaries. Up to six labeled crops provide detail for text that becomes too small in the scaled page. When earlier source text matches after case and whitespace normalization, a few previous translations are supplied as references; the model decides whether they fit the current context. Use `--text-only` for a text model. Region IDs and terminology structures are validated before a response is saved.
 
-使用 `translate --prompt prompt.txt` 可替换翻译提示词。模板支持 `{{target_language}}`、`{{style}}`、`{{visual}}`、`{{response_schema}}`、`{{context}}` 和 `{{terminology}}`；后两者分别加入前后文和相关词表，未引用时不发送对应内容。自定义模板缺少 `{{terminology}}` 时，启动翻译会提示本次不发送词表、不收集候选术语，并继续执行。`translation.variables` 可定义其他字符串变量，如 `{{series}}`，变量值按原文插入，不再递归展开。`{{style}}` 同时启用相应的本地对白格式处理；不引用时保留模型输出的标点。当前页面对白、坐标以及选用的上下文作为独立用户消息发送，模型输出仍按区域 ID 校验，页面记录保存提示词及变量的指纹。译文可以通过 `review` 导出、审校，再用 `apply-review` 写回。
+Response caching is opt-in with `--cache`. Validated responses are stored under `.cache/translation/`; request bodies and API keys are excluded.
 
-例如，下面的模板使用上下文但不发送词表：
+Transient network errors and HTTP 408/429/500/502/503/504 receive at most three attempts per model. Short `Retry-After` delays are honored. A delay over 30 seconds or a date-valued delay ends the run so it can be resumed later. Configure `--fallback-model`, `CAMEL_FALLBACK_MODEL`, or `translation.fallback_model` to use another model after exhausted transient retries or a length-truncated response. Each new page starts with the preferred model. Explicit content-filter refusals are recorded without switching models; authentication errors, redirects, and invalid responses are reported.
+
+`translation_models` records the model that produced each current generated translation. Editing or clearing a translation removes that provenance entry. Invalid responses never replace page content.
+
+Provider-specific request fields belong in `translation.request_options`. For providers that support it, an option such as `{"thinking":{"type":"disabled"}}` controls reasoning behavior. Use only options supported by your configured service.
+
+With `--continue-on-error`, an invalid reply or region-ID mismatch is retried once; a second failure is recorded and later pages continue. Exhausted transient service failures also mark the page and continue. Three consecutive transient page failures, authentication errors, or a long server-requested delay stop the run. Explicit refusals isolate affected pages and their context. Existing translations remain usable; unfinished pages are reported and cause a nonzero exit status.
+
+### Terminology and scene context
+
+Pass a JSON mapping of source terms to confirmed translations with `translate --glossary terms.json`. It is saved as `glossary.json` and takes precedence over model suggestions and earlier context. Suggestions remain separate in `proposed_terms`. Conflicts with confirmed terms are recorded on the page and in the log for review.
+
+Requests include terminology relevant to the current page, nearby pages, and preceding context. Optional entries share a 4096-character budget; confirmed terms found on the current page are always included. Updating the glossary affects future requests. Use review tools to change existing dialogue.
+
+`camel check-terms book -o terms-review.json` checks translated dialogue against the confirmed glossary locally. It reports source terms left untranslated or missing their expected translation, with page, region, source, translation, and term details. Preserved pages and regions are excluded. Candidates still need human review: ordinary word meanings, omissions, and OCR errors can cause false positives or negatives. Findings do not prevent export or change the command's successful exit status. Existing reports are preserved.
+
+Translation is sequential by default. Use `camel translate book --jobs 3`, or `translation.jobs`, to process independent scenes concurrently while keeping pages within a scene sequential. The first parallel run creates `translation-plan.json` from OCR text. You can prepare and inspect it in advance with `camel prepare book --jobs 3`.
+
+Planning uses bounded text batches and merges scenes that continue across batches. Scene boundaries and summaries are model inferences. Concurrent scenes do not wait for one another's new translations, so review transitions between scenes. Each scene has independent context; conflicting proposed terms are recorded in page issues. Resuming reconstructs dialogue from completed, unaffected pages and clears context at content-filter boundaries. Changes to source text, region membership, or preservation repair the plan; translation-only edits leave it valid.
+
+For a sequel, add `--context-from previous-book` to inherit confirmed and proposed terminology, recent reviewed dialogue, and scene summaries. Both projects must use the same target language. Once the sequel saves progress, this context is frozen as a snapshot. Later runs can omit the option. If the previous project changes, Camel reports the difference and keeps the frozen snapshot; start a new sequel project to use updated context.
+
+### Prompts and metrics
+
+`translate --prompt prompt.txt` replaces the translation prompt. Templates support `{{target_language}}`, `{{style}}`, `{{visual}}`, `{{response_schema}}`, `{{context}}`, and `{{terminology}}`. Context and terminology are sent only when their placeholders are present. Omitting `{{terminology}}` produces a notice and disables terminology collection for that request. Define additional string variables, such as `{{series}}`, in `translation.variables`; values are inserted literally without recursive expansion.
+
+`{{style}}` enables the associated local dialogue formatting rules. Without it, model punctuation is retained. Current dialogue, coordinates, and selected context are sent as a separate user message. Checkpoints retain the prompt fingerprint as provenance.
+
+For example, this template includes context but omits terminology:
 
 ```text
 Translate the comic dialogue into natural {{target_language}}.
@@ -124,34 +154,77 @@ Preserve tone and meaning; keep uncertain names in their original form for revie
 {{response_schema}}
 ```
 
-翻译续卷时可加 `--context-from previous-book`，继承前卷已确认译名、待确认译名、最近对白和场景摘要。前卷的人工审校对白会重新计入上下文；两卷的目标语言须一致。续卷开始保存后，上下文作为快照固定；后续不传此选项即可按页继续。再次指定前卷时会检查来源和内容是否改变；如有变化会提示并继续使用原快照。如需使用更新后的前文，请创建新的续卷项目。
+The Simplified Chinese style omits ordinary sentence-ending periods at balloon boundaries, preserves meaningful punctuation, pauses, interruptions, repetition, emphasis, profanity, and character voice, and avoids inventing ellipses between consecutive balloons. It follows the tone and continuity principles of the [Netflix Simplified Chinese timed-text style guide](https://studiopartner.netflix.net/studio/chinese-simplified-timed-text-style-guide), without adopting subtitle length, line, duration, space-for-punctuation, or repetition-removal rules. Local normalization applies to newly generated dialogue; quoted punctuation, repeated punctuation, and manually reviewed text are preserved.
 
-简中对白默认省略气泡末尾的普通句号；同泡内按口语语义使用逗号和必要句号，保留问号、感叹号及表达停顿、打断的省略号和破折号，连续话不因跨泡而额外加省略号。重复、强调、脏话力度和角色口吻也应保留。这里参考 [Netflix 简中字幕规范](https://studiopartner.netflix.net/studio/chinese-simplified-timed-text-style-guide) 的语气与连续性原则，但不采用其以空格替代逗号/句号、删重复词或字幕字数、行数、时长限制。模型请求带有简中风格指导，新生成对白入库时去除明确的泡末普通句号；原文以问号结尾、译文以“吗”结尾时补上问号。引号内标点、连续标点和人工审校文本保持原样。
+`translation-metrics.jsonl` records request duration, actual model, attempt count, cache hits, token usage, and errors. It excludes request content, images, and credentials. `elapsed_ms` covers one API attempt, excluding page preparation and saving; it does not separate service queuing from generation.
 
-`review` 导出独立的台词 JSON，包括页名、图片尺寸、区域 ID、OCR 原文、原文与气泡坐标和可编辑的 `translation`；有可用分析时还包含画格 ID、模型修正原文、说话人和场景摘要。这些上下文字段为只读参考，模型推断保留来源标记。每页的 `unresolved_regions` 列出未处理的文字候选、坐标和原因；`inspect` 也显示各页的候选数量，旧项目没有分析信息时显示 `null`。`apply-review` 校验原文、区域 ID 和导出时的 `original_translation` 后应用译文改动；同一句译文在审校文件和项目中都被改成不同时会提示冲突；未修改的审校行会保留项目中的新译文；几何、掩码和图片保持原样。之后运行 `export` 重新排版。继续翻译时，前文窗口使用审校后的台词。
+### Review and repair
 
-版权页、制作名单等不需要翻译的内容，可在审校 JSON 的页面或区域上设置 `"preserve_original": true`，再用 `apply-review` 导入。翻译会跳过这些内容，擦字和排版会保留原图；设为 `false` 可恢复处理。
+`camel review book -o review.json` exports editable dialogue with page names, image dimensions, region IDs, OCR text, text and balloon bounds, and `translation`. Where analysis is available, it includes panel IDs, corrected source text, speakers, and scene summaries. Those context fields are read-only references, and model inferences retain provenance. Each page also lists unresolved OCR candidates with their bounds and reasons.
 
-对已核对的未解决 OCR 区域，可使用 `camel repair-region book request.json` 重新生成安全区域并写入译文；请求包含 `page`、原页记录的 `source`、区域 ID（`region`）、`original_text`、需排除的误归属词序号（`exclude_words`）、`translation` 和可选的 `insert_before` / `insert_after` 阅读顺序锚点。涉及相邻区域内容拆分时还需提供 `split` 的原文、原译文及拆分后内容。命令校验源图与掩码，保留原始 OCR，更新检查点并使受影响场景摘要失效。审校 JSON 的区域可用 `font_size` 指定 10–64 像素字号，设为 `null` 恢复自动字号。 对确认误识别的已有区域，可使用 `camel remove-region book request.json`；请求包含页名 `page`、页面原图引用 `source`、区域 ID `region` 和识别原文 `original_text`。命令移除该区域并更新相关上下文、检查点和翻译计划，保留原始 OCR 供核查。
+After editing the file, run `camel apply-review book review.json`. Camel checks source text, region IDs, and `original_translation` before applying changes. If both the project and review file changed the same translation differently, it reports a conflict. Unchanged review entries preserve newer project translations. Images, masks, and geometry are retained. Run `export` again to typeset the updated dialogue; subsequent translation runs use the reviewed text as context.
 
+Set `"preserve_original": true` on a page or region to keep covers, credits, or other material unchanged. Translation skips it, and export preserves its original lettering. Set the flag to `false` to resume processing. A region's `font_size` can select a size from 10 to 64 pixels; `null` restores automatic sizing.
 
-## 图像处理
+For model-assisted review, run `camel audit book -o audit.json`, optionally with `--jobs 3` and the translation's `--prompt`. Audit groups contain up to four pages within a scene, with neighboring source context. Without a plan, adjacent pages are grouped together. Evidence-based suggestions are stored in `audit_issues`; current dialogue in `pages[].regions[].translation` stays unchanged. Copy accepted suggestions into the translation fields, then apply the file with `apply-review`.
 
-检测器分别提供气泡、气泡内文字和画面文字候选。在原图中按连通笔画分行，气泡内相邻字母的共同高度用于识别正文行，避免周围装饰线和小标点压低行高。相邻行笔画相接导致漏读时，参考同泡文字高度重新识别。正文两侧成组的装饰线从识别图中排除，原始范围仍用于坐标和擦除。白色纸面上的彩色文字按图像对比度选择灰度转换，保留完整笔画。结合纸面连通性与连续笔画排除气泡外的细碎画线，保留同一纸面上的细字、标点和封闭字腔。根据封闭纸面与内部字形的包含关系剔除旁白框线，以正文行确定标点归属，避免小点和画线连带扩大识别范围；再将 CTC 词边界与字间空白对齐；较大的首字母按基线关联到对应文本行。跨行下沉的首字母完整归入首行，识别时按正文行高缩放，再把词坐标映回原图。同页相同来源的文本行只识别一次；相同文字与坐标的重复对白合并，同一基线上被完整读法覆盖的截断词去重，原始观察保存在 `analysis.initial_ocr`。所有对白共同参与画格排序和气泡分区，重叠文本框按逐词位置划分归属，每页复用画格与纸色候选检测结果。
+Validated audit responses can be reused after a failed run. Content-filter refusals are recorded, and later groups that may contain the same material are skipped. Repeat `--skip-page` to exclude specific pages. After two invalid replies, audit continues with other groups, writes a partial report, and exits with an error. Retry failed groups with a new output path. Oversized audit requests are rejected rather than silently truncating dialogue.
 
-从字框外缘估计背景色，对局部区域做连通分析和窄颈分离，限制与格间留白连通的气泡。物理纸面与相邻对白分割后的排版区分别处理，避免把字形内的小块白色当成整段对白的背景。字形掩码独立保存；平涂气泡使用纸色众数统一填色，独立渐变旁白在背景拟合通过后连续重建纸面。缺少完整纸面轮廓的气泡文字可使用窄掩码局部插值，避开相邻未识别笔画，并用周围纸面样本检验。无法形成有效排版区域的文字保留原图、结构化 OCR 和问题原因。
+`camel repair-region book request.json` rebuilds a reviewed unresolved region and supplies a translation. Requests contain `page`, the recorded `source`, `region`, `original_text`, `exclude_words`, `translation`, and optional `insert_before` / `insert_after` reading-order anchors. When splitting neighboring dialogue, `split` includes the previous and replacement source and translation. The command validates images and masks, preserves raw OCR, updates checkpoints, and invalidates affected scene summaries.
 
-中文横排使用安全排版区每一行的可用区间，参考原文 OCR 字高统一页内字号，并围绕气泡主体平衡上下、左右留白。整段共用排版中轴，尾巴和与格间留白连通的开口分别参与空间约束；断行兼顾行宽、标点、孤字和字形外伸，同时保留语气停顿。中文使用 Jieba 分词辅助选择断行位置，并在本地优先保持已确认译名完整；空间不足时仍可在词内换行。内置词典来自 jieba-rs 0.11，许可证位于 `crates/camel/src/data/`。整页排版成功后执行擦字与绘制。字体可通过 `--font` 指定，默认优先寻找霞鹜文楷 Medium，再寻找本机中文字体。文楷可放在 `$XDG_DATA_HOME/camel/fonts/`（默认 `~/.local/share/camel/fonts/`）；字体独立于二进制加载。
+`camel remove-region book request.json` removes a confirmed false detection. Its request contains `page`, `source`, `region`, and `original_text`. Related context, checkpoints, and the translation plan are updated, while original OCR evidence remains available.
 
-## 库
+### Check layout and export
 
-工作区的 crate 都在 `crates/` 下：
+`camel check-layout book -o layout.json --font comic.ttf` uses the same font, phrase hints, source letter heights, and balloon geometry as export. It reports selected sizes, text that does not fit, missing glyphs or translations, and overlaps. Pages with content-filter history still have their available translations checked. Source-image errors fail the command. Reports preserve existing files. Review the final rendered images as well as the report.
 
-- `crates/camel/`：核心库。`geometry::analyze` 将调用方提供的 `TextBlock` 转为带独立擦字掩码的 `Page`，`mask` 校验和修改掩码、填充与排版区，`translation::translate_page` 接受可替换的 `Translator`，`translate_missing_page` 用于补译，`layout::Typesetter` 负责字体测量与绘制，`comic::ComicSource` 从路径或任意可定位读取器读取漫画页。
-- `crates/camel-vision/`：可共享的 `Engine`、独立检测器和行识别器。`Engine::load` 加载模型，`Engine::analyze` 接受 RGB 图像并返回 `Page` 与 `AnalysisMetadata`，结果可直接交给核心库擦字、翻译和排版。
-- `crates/camel-project/`：项目文件格式和完整流水线（分析、场景规划、翻译、审校、术语与排版检查、导出、人工编辑、翻译计划修复）。文件读写、网络请求、计时和进度输出都通过 `host::Host` 交给调用方实现；CLI 与工作台共用。
-- `crates/camel-web/`：工作台使用的 WebAssembly 接口，用浏览器的文件、网络和计时实现 `Host`。
-- `crates/camel-cli/`：命令行，用本地文件和 ureq 实现 `Host`。
+`camel export book -o translated.cbz` erases source lettering and typesets translations. Use a directory output for individual PNGs, or a `.cbz` path for an archive. `--clean` exports erased pages without typesetting; directory output includes matching JSON metadata. With directory output, `--mask-output` also writes masks whose white pixels identify erased areas. Clean export needs analysis results but no translations. Output dimensions match the original images. Repeated exports reuse identical files, complete missing ones, and report conflicting existing content.
+
+Dialogue identical to its source retains the original lettering. Recognized text without a usable glyph mask is also preserved and reported. `--allow-partial` exports unfinished projects: missing or unrenderable dialogue stays original, as do neighboring regions whose erase or layout areas overlap retained text. Other layout failures preserve the whole page. Content-filter history is reported while available translations render normally.
+
+Warnings and retention reasons are recorded in `render-report.json` for a directory, or `<comic>.report.json` beside a CBZ. Override the path with `--report`.
+
+## Project format and image processing
+
+`index.json` lists page records, `source.json` points to the original comic, and `NNNNN.json` stores regions, masks, translations, analysis evidence, and checkpoints. `translation-plan.json` stores scene grouping, `glossary.json` stores confirmed terminology, and `reports/` holds workbench reports. Original images and models remain separate.
+
+Page `issues` are objects tagged by `kind`: `unresolved_text`, `translation_failed`, `content_filter`, `content_filter_context`, `confirmed_term_conflict`, `scene_term_conflicts`, or a manual `note`. `inspect` exposes these structures; the workbench and export reports display readable messages. Page `context` contains glossary state, proposed terms, and scene summaries. Recent dialogue is reconstructed from page records.
+
+The project is in active development and its format can change directly. Records with the former string-based issues need a one-time external conversion; the application does not include a legacy reader.
+
+### Coordinates, masks, and evidence
+
+Coordinates use original image pixels with a top-left origin. Rectangle right and bottom edges are exclusive. `page.regions` contains source text, word coordinates and confidence, translations, and background colors. `bubble.glyphs` records source glyphs, `bubble.erase` the erase area, and `bubble.interior` the estimated safe typesetting area. Gradient reconstruction is stored in `background_model` or `background_repair`.
+
+Horizontal mask spans are `[y, start, end]`, with exclusive `end`. Dense glyph masks use coordinate deltas, ZigZag and variable-length integer encoding, then zlib and Base64; empty glyph masks are omitted. Local background repair is identified by `background_repair.method = "harmonic_local_v1"`.
+
+`analysis` preserves ordered panels, dialogue-to-panel associations, original OCR, and closed contours of safe typesetting areas, including holes or disconnected parts. These contours describe usable layout space, not exact balloon outlines. Unresolved regions retain words, confidence, and reasons. Corrected source text, speaker descriptions, and scene summaries are stored separately with provenance.
+
+Detection results live in `analysis.visual_detections`; `analysis.ocr_engine` identifies the recognizer. `analysis.initial_ocr` preserves raw observations. Alternative whole-region recognition is stored in `analysis.ocr_alternatives` and is not used automatically without supporting evidence.
+
+`analysis.ocr_observations` connects `detection_id`, line bounds, and reading-ordered `initial_ocr` block IDs. Detected but unread lines retain coordinates; each word's `line` points to the corresponding line index. Observations remain traceable after deduplication. Three separate aligned dots can be recognized geometrically as an ellipsis; their line indices are stored in `geometric_lines`, with zero confidence to indicate the absence of a model score.
+
+### Recognition and rendering
+
+The detector distinguishes balloons, text inside balloons, and lettering in artwork. Recognition groups connected strokes into lines, uses neighboring letter heights to recover missed lines, and excludes decorative strokes while retaining original coordinates for erasure. Contrast-aware grayscale conversion helps with colored lettering. Connected paper and stroke structure distinguish small text and punctuation from surrounding artwork and caption borders. CTC word boundaries are aligned with image spacing; drop capitals are associated with their baseline and mapped back to original coordinates.
+
+Repeated observations and truncated duplicate readings are deduplicated while retaining raw OCR evidence. Regions share panel ordering and paper detection, and overlapping text boxes are divided by word positions.
+
+Background estimation uses color samples, connected regions, and narrow-neck separation to constrain balloons that connect to gutters. Physical paper areas and dialogue-specific layout areas are treated separately. Flat backgrounds use a representative paper color; validated gradient models reconstruct continuous backgrounds. Narrow local interpolation can repair lettering without a complete paper boundary while avoiding nearby unrecognized strokes. Text without a safe region remains visible in the original image and is recorded for review.
+
+Horizontal Chinese typesetting uses the available interval on each scanline, source letter height, consistent page typography, and balanced margins. Line breaks account for width, punctuation, isolated characters, glyph overhang, and pauses. Jieba segmentation and confirmed terminology guide breaks; a term may still break when space requires it. The bundled dictionary comes from jieba-rs 0.11; its license is in `crates/camel/src/data/`. A page is erased and drawn only after layout succeeds.
+
+## Libraries
+
+All workspace crates live under `crates/`:
+
+| Crate | Responsibility |
+| --- | --- |
+| `camel` | Geometry, editable masks, translation contracts, comic readers, and typesetting. `geometry::analyze` turns supplied `TextBlock` values into a `Page`; `translation::translate_page` and `translate_missing_page` accept a replaceable `Translator`; `layout::Typesetter` measures and renders text. |
+| `camel-vision` | A shareable recognition `Engine`, detector, and line recognizer. `Engine::analyze` returns a `Page` and `AnalysisMetadata` from an RGB image. |
+| `camel-project` | Project storage and orchestration: analysis, planning, translation, audit, checks, export, editing, and plan repair. File access, requests, timing, and progress are supplied through `host::Host`. |
+| `camel-web` | WebAssembly bindings and the browser implementation of `Host`. |
+| `camel-cli` | Command-line interface with local filesystem access and ureq-backed requests. |
 
 ```rust,no_run
 use camel_vision::Engine;
@@ -163,7 +236,9 @@ let (page, analysis) = engine.analyze(&image)?;
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
 
-## 开发
+`comic::ComicSource` reads individual pages from directories, CBZ/ZIP, and CBR/RAR, through paths or seekable readers. `geometry::prepare_erase(&original, &bubble)?.layer()` produces a transparent RGBA erase layer with its page coordinates. Compositing it over the original matches direct erasure; layers are generated on demand from the image, masks, and reconstruction parameters.
+
+## Development
 
 ```sh
 just check
@@ -172,16 +247,27 @@ just dist
 just web
 ```
 
-`just web` 依次构建 WebAssembly（需要 `wasm32-unknown-unknown` 目标、与 `crates/camel-web` 中版本一致的 `wasm-bindgen` CLI 和 `wasm-opt`）、前端和前端测试。
+`just check` runs formatting, native and wasm32 Clippy, Rust tests, and documentation checks. `just web` builds WebAssembly, bundles the frontend, type-checks application and test code, and runs frontend tests.
 
-全量识别和擦字评测直接读取本地图片，复用已加载的模型，擦字图在内存中校验：
+Tests requiring fonts, models, or sample pages are ignored by default. Follow each test's environment requirements. For example:
+
+```sh
+CAMEL_TEST_FONT=/path/to/comic.ttf \
+  cargo test -p camel-cli --test workflow --test review -- --ignored
+```
+
+Validated toolchain: Rust 1.98.1, Node.js 26.13.1, wasm-bindgen 0.2.129, and wasm-opt 133.
+
+For recognition and erasure evaluation against local images:
 
 ```sh
 just evaluate models/ pages/ results/ 2
 ```
 
-末尾数字指定并发页数，默认 2。输出目录逐页保存原图路径、结构化结果和耗时，`summary.json` 汇总完成情况。图片和模型均独立于评测结果保存。
+The final argument controls page concurrency and defaults to two. Models are loaded once and reused; erased images are checked in memory. Per-page results contain the source path, structured output, and timing, with aggregate status in `summary.json`. Source images and models remain outside the results directory.
 
-`release` 使用 thin LTO；`dist` 使用 fat LTO、单 codegen unit 和符号裁剪，图像处理保留优化级别 3。图片编解码只启用 PNG、JPEG，排版使用 ab_glyph，网络使用 ureq。
+The `release` profile uses thin LTO. `dist` uses fat LTO, one codegen unit, and stripped symbols; image processing retains optimization level 3. Image codecs are limited to PNG and JPEG. Typesetting uses ab_glyph and networking uses ureq.
 
-设计参考 [Koharu](https://github.com/koharu-rs/koharu) 的流水线及轮廓排版、[BallonsTranslator](https://github.com/dmMaze/BallonsTranslator) 的文字掩码分层、[MomoTranslator](https://github.com/alicewish/MomoTranslator) 的气泡分离，以及 [manga-image-translator](https://github.com/zyddnys/manga-image-translator) 的文本连通域与掩码修正流程。Rust 风格参考 [Microsoft](https://microsoft.github.io/rust-guidelines/) 和 [Google](https://google.github.io/styleguide/rustguide.html)，命令行参考 [clig.dev](https://clig.dev/)。
+## References
+
+The pipeline and layout draw on [Koharu](https://github.com/koharu-rs/koharu), mask layering on [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator), balloon separation on [MomoTranslator](https://github.com/alicewish/MomoTranslator), and text connectivity and mask refinement on [manga-image-translator](https://github.com/zyddnys/manga-image-translator). Rust style follows the [Microsoft](https://microsoft.github.io/rust-guidelines/) and [Google](https://google.github.io/styleguide/rustguide.html) guides; CLI behavior follows [clig.dev](https://clig.dev/).
