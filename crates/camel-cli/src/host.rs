@@ -368,6 +368,9 @@ impl Console {
                 }
             }
             Event::Notice { message } => eprintln!("{message}"),
+            Event::GroupStarted { first, last, total } => {
+                eprintln!("Auditing pages {first}–{last} of {total}");
+            }
             Event::Request {
                 model,
                 elapsed_ms,
@@ -399,6 +402,7 @@ impl Console {
             } => eprintln!("  {model}: {error}; trying {fallback}"),
             Event::Warning { .. }
             | Event::PageSaved { .. }
+            | Event::GroupFinished { .. }
             | Event::SceneStarted { .. }
             | Event::SceneFinished { .. } => {}
         }

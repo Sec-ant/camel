@@ -88,3 +88,15 @@ test("describeEvent words events like the command line, with page links", () => 
   assert.equal(describeEvent({ type: "page_saved", page: "00001.json" }, 0, indexOf), null);
   assert.equal(describeEvent({ type: "warning", page: null, message: "w" }, 0, indexOf)?.tone, "warning");
 });
+
+test("audit groups mark their pages running, then done when the review is validated", () => {
+  const progress = new Progress(records);
+  progress.apply({ type: "group_started", first: 1, last: 4, total: 10 }, 0);
+  progress.apply({ type: "group_started", first: 5, last: 8, total: 10 }, 0);
+  assert.deepEqual([...progress.states.slice(0, 9)], [...Array(8).fill(PAGE_RUNNING), PAGE_PENDING]);
+  progress.apply({ type: "group_finished", first: 1, last: 4 }, 1);
+  assert.deepEqual([progress.done, progress.total], [4, 10]);
+  // A group that fails validation never finishes; settling returns its pages to pending.
+  progress.settle(false, 2);
+  assert.deepEqual([...progress.states.slice(3, 6)], [PAGE_DONE, PAGE_PENDING, PAGE_PENDING]);
+});

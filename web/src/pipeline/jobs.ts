@@ -104,6 +104,8 @@ function settle(job: Job, outcome: { result: OperationResult } | { error: unknow
     job.result = outcome.result;
     job.status = cancelling ? "cancelled" : "done";
     job.progress.settle(true, now);
+    // Term checks and scene planning report no per-page events.
+    if (!cancelling && (job.kind === "check_terms" || job.kind === "prepare")) job.progress.finishAll(now);
   } else {
     job.error = message(outcome.error);
     job.status = cancelling ? "cancelled" : "failed";

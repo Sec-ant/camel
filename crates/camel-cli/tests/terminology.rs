@@ -89,13 +89,14 @@ fn check_terms_reports_candidates_without_changing_the_project() {
 }
 
 #[test]
-fn check_terms_requires_the_project_glossary() {
+fn check_terms_without_a_glossary_reports_no_term_candidates() {
     let dir = TempDir::new().unwrap();
     write(&dir.path().join("index.json"), &json!([]));
-    let result = check(dir.path(), &dir.path().join("terms.json"));
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("glossary.json"));
-    assert!(!dir.path().join("terms.json").exists());
+    let output = dir.path().join("terms.json");
+    let result = check(dir.path(), &output);
+    assert!(result.status.success());
+    let report: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
+    assert_eq!(report["issues"], json!([]));
 }
 
 #[test]

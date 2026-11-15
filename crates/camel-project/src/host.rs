@@ -182,6 +182,22 @@ pub enum Event {
         /// Pages refused by the content filter.
         filtered: usize,
     },
+    /// An audit group of consecutive pages was sent for review.
+    GroupStarted {
+        /// One-based position of the group's first page.
+        first: usize,
+        /// One-based position of the group's last page.
+        last: usize,
+        /// Number of pages in the project.
+        total: usize,
+    },
+    /// An audit group's review was received and validated.
+    GroupFinished {
+        /// One-based position of the group's first page.
+        first: usize,
+        /// One-based position of the group's last page.
+        last: usize,
+    },
     /// Informational progress.
     Notice {
         /// Human-readable message.

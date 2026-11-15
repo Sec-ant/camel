@@ -102,6 +102,13 @@ export class Progress {
         this.total = event.total;
         this.complete(event.index - 1, now);
         break;
+      case "group_started":
+        this.total = event.total;
+        for (let page = event.first; page <= event.last; page += 1) this.start(page - 1);
+        break;
+      case "group_finished":
+        for (let page = event.first; page <= event.last; page += 1) this.complete(page - 1, now);
+        break;
       case "scene_started":
         this.scenes = { ...this.scenes, total: event.total };
         break;
@@ -130,6 +137,12 @@ export class Progress {
       if (ok) this.complete(index, now);
       else this.#set(index, PAGE_PENDING);
     });
+  }
+
+  /** For operations that read the whole project without reporting pages: every page is done. */
+  finishAll(now: number): void {
+    this.total = this.states.length;
+    this.states.forEach((_, index) => this.complete(index, now));
   }
 
   /** Units (scenes when the operation reports them, else pages) finished and expected. */
@@ -192,6 +205,10 @@ export function describeEvent(event: PipelineEvent, time: number, indexOf: (page
       if (event.action === "render") return line("info", `${at} render ${event.image} (${event.regions ?? 0} regions)`);
       return line("info", `${at} ${event.action} ${event.image}`);
     }
+    case "group_started":
+      return line("info", `Auditing pages ${event.first}–${event.last} of ${event.total}`);
+    case "group_finished":
+      return line("quiet", `Audited pages ${event.first}–${event.last}`);
     case "scene_started":
       return line("info", `Scene ${event.scene} of ${event.total}: ${event.first} – ${event.last}`);
     case "scene_finished": {
