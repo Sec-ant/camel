@@ -22,6 +22,7 @@ import {
   chooseFont,
   chooseModels,
   chooseOutputFolder,
+  downloadModels,
   folderState,
   persistStorage,
   rememberProject,
@@ -228,14 +229,25 @@ export function NewProject() {
           <Slot
             number={3}
             title="Models"
-            note="detector.onnx and recognizer.onnx (the CLI's model folder). Copied into this browser's storage once."
+            note="Download the default models (18 MB), or choose your own model folder. Models are saved in this browser."
             check={modelCheck}
             status={
               models &&
               `detector.onnx ${megabytes(models.detector.size)} · recognizer.onnx ${megabytes(models.recognizer.size)} · cached`
             }
           >
-            <button type="button" class="button" onClick={pick(async () => {
+            <button type="button" class="button" disabled={modelCheck.state === "checking"} onClick={pick(async () => {
+              setModelCheck({ state: "checking" });
+              try {
+                setModels(await downloadModels());
+                setModelCheck({ state: "ok" });
+              } catch (error) {
+                setModelCheck({ state: "error", message: errorMessage(error) });
+              }
+            })}>
+              {modelCheck.state === "checking" ? "Loading models…" : "Download defaults"}
+            </button>
+            <button type="button" class="button" disabled={modelCheck.state === "checking"} onClick={pick(async () => {
               setModelCheck({ state: "checking" });
               try {
                 const chosen = await chooseModels();

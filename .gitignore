@@ -5,3 +5,4 @@ web/src/wasm/
 .codex/
 .impeccable/config.local.json
 .impeccable/hook.cache.json
+web/models/

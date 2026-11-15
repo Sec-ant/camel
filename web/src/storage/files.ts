@@ -232,8 +232,12 @@ export async function chooseFont(): Promise<FontData | null> {
   const [file] = await chooseFiles({ accept: ".ttf,.otf,.ttc" });
   if (!file) return null;
   const font = { name: file.name, bytes: await file.arrayBuffer() };
-  await idbSet(FONT, font);
+  await saveFont(font);
   return font;
+}
+
+export function saveFont(font: FontData): Promise<void> {
+  return idbSet(FONT, font);
 }
 
 export function rememberedFont(): Promise<FontData | undefined> {
@@ -327,6 +331,22 @@ export async function cachedModels(): Promise<ModelFiles | null> {
   } catch {
     return null;
   }
+}
+
+/** Downloads the site's default models and stores them for later projects. */
+export async function downloadModels(): Promise<ModelFiles> {
+  const files = await Promise.all(MODEL_FILES.map(async (name) => {
+    const response = await fetch(new URL(`./models/${name}`, import.meta.url));
+    if (!response.ok) throw new Error(`Could not download ${name} (HTTP ${response.status}).`);
+    return new File([await response.blob()], name);
+  }));
+  const directory = (await opfsDirectory(["models"], true))!;
+  for (const [index, name] of MODEL_FILES.entries()) {
+    const stream = await (await directory.getFileHandle(name, { create: true })).createWritable();
+    await stream.write(files[index]!);
+    await stream.close();
+  }
+  return (await cachedModels())!;
 }
 
 /** Picks the model folder and caches detector.onnx and recognizer.onnx in private storage. */

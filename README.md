@@ -15,9 +15,9 @@ The sample shows *Invincible* translated into Simplified Chinese. Artwork belong
 
 ## Get started
 
-1. Open the [workbench](https://sec-ant.github.io/camel/) in a desktop browser.
-2. Download the recognition models below and choose a font that covers your target language.
-3. Choose **New project**, then select your comic, models, and font.
+1. Open the [workbench](https://sec-ant.github.io/camel/) in a desktop browser. A two-page example project opens on your first visit.
+2. Choose a font that covers your target language.
+3. Choose **New project**, select your comic and font, and download the default models or choose your own model folder.
 4. Open **Settings** and enter your API URL, model, API key, and target language. The API must allow cross-origin browser requests.
 5. Use **Jobs** to translate and export, and **Workbench** to review the result.
 
@@ -58,3 +58,5 @@ just check    # Rust formatting, Clippy, tests, and docs
 ```
 
 The static build is written to `web/dist/`. GitHub Actions deploys it to GitHub Pages on pushes to `main`.
+
+The starter project uses two pages from *Coffee for You* by [ArtAvenue](https://krita-artists.org/t/coffee-for-you-short-comic/3394), licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The pages have been translated into Chinese. The default preview font is [LXGW WenKai](https://github.com/lxgw/LxgwWenKai), licensed under the SIL Open Font License.

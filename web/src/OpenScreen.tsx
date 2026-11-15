@@ -5,6 +5,7 @@ import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { call, openComic } from "./engine.ts";
 import { NewProject } from "./NewProject.tsx";
+import { installStarterProject } from "./starter.ts";
 import { recordReference } from "./protocol.ts";
 import { Session, readIndex } from "./session.ts";
 import { openMode, start } from "./state.ts";
@@ -67,9 +68,11 @@ export function comicName(choice: ComicChoice): string {
 
 export function OpenScreen() {
   const mode = openMode.value;
+  const [initializing, setInitializing] = useState(!localStorage.getItem("camel.projects.initialized"));
   return (
     <main class="open-screen">
-      <div class="buttons joined mode-switch" role="group" aria-label="Project">
+      {initializing && <p class="helper">Opening project…</p>}
+      <div class="buttons joined mode-switch" role="group" aria-label="Project" hidden={initializing}>
         <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => (openMode.value = "open")}>
           Open project
         </button>
@@ -78,17 +81,17 @@ export function OpenScreen() {
         </button>
       </div>
       {/* Both stay mounted so choices (and a running analysis view) survive switching. */}
-      <div class="open-mode" hidden={mode !== "open"}>
-        <OpenProject />
+      <div class="open-mode" hidden={initializing || mode !== "open"}>
+        <OpenProject onInitialized={() => setInitializing(false)} />
       </div>
-      <div class="open-mode" hidden={mode !== "new"}>
+      <div class="open-mode" hidden={initializing || mode !== "new"}>
         <NewProject />
       </div>
     </main>
   );
 }
 
-function OpenProject() {
+function OpenProject({ onInitialized }: { readonly onInitialized: () => void }) {
   const [projectState, setProject] = useState<ProjectState | null>(null);
   const [projectCheck, setProjectCheck] = useState<Check>({ state: "idle" });
   const [comic, setComic] = useState<ComicState | null>(null);
@@ -100,9 +103,16 @@ function OpenProject() {
   const [openError, setOpenError] = useState<string | null>(null);
 
   useEffect(() => {
+    void installStarterProject().then(async (handle) => {
+      if (handle) await openStored(handle);
+      else setStored(await browserProjects());
+    }).catch((error: unknown) => setOpenError(errorMessage(error))).finally(onInitialized);
+  }, []);
+
+  useEffect(() => {
     void rememberedFont().then((remembered) => remembered && setFont(remembered));
     void recentProjects().then(setRecent);
-    if (tier === "snapshot") void browserProjects().then(setStored);
+    void browserProjects().then(setStored);
   }, []);
 
   // Check the comic against the project (page count, then page 1) whenever either changes.
@@ -191,6 +201,36 @@ function OpenProject() {
       setProgress(null);
       setOpenError(errorMessage(error));
     }
+  };
+
+  // Projects can include their original images in an images/ folder.
+  const openStored = async (handle: FileSystemDirectoryHandle): Promise<void> => {
+    const projectFiles = new ProjectFiles(new DirectoryStore(handle));
+    let imageDirectory: FileSystemDirectoryHandle;
+    try {
+      imageDirectory = await handle.getDirectoryHandle("images");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "NotFoundError") {
+        await loadProject({ files: projectFiles, handle: null });
+        return;
+      }
+      throw error;
+    }
+    const images: File[] = [];
+    for await (const entry of imageDirectory.values()) {
+      if (entry.kind === "file" && /\.(jpe?g|png)$/i.test(entry.name)) {
+        images.push(await (entry as FileSystemFileHandle).getFile());
+      }
+    }
+    const selectedFont = await rememberedFont();
+    if (!selectedFont || images.length === 0) {
+      await loadProject({ files: projectFiles, handle: null });
+      return;
+    }
+    const comicFiles = { kind: "images" as const, name: handle.name, files: images };
+    const comic = await openComic(comicFiles);
+    const opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined });
+    await start(opened);
   };
 
   const reopenRecent = async (entry: RecentProject): Promise<void> => {
@@ -321,7 +361,7 @@ function OpenProject() {
                   <button
                     type="button"
                     class="button small"
-                    onClick={pick(() => loadProject({ files: new ProjectFiles(new DirectoryStore(entry.handle)), handle: null }))}
+                    onClick={pick(() => openStored(entry.handle))}
                   >
                     Choose
                   </button>
