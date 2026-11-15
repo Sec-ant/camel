@@ -149,9 +149,9 @@ Preserve tone and meaning; keep uncertain names in their original form for revie
 
 - `crates/camel/`：核心库。`geometry::analyze` 将调用方提供的 `TextBlock` 转为带独立擦字掩码的 `Page`，`mask` 校验和修改掩码、填充与排版区，`translation::translate_page` 接受可替换的 `Translator`，`translate_missing_page` 用于补译，`layout::Typesetter` 负责字体测量与绘制，`comic::ComicSource` 从路径或任意可定位读取器读取漫画页。
 - `crates/camel-vision/`：可共享的 `Engine`、独立检测器和行识别器。`Engine::load` 加载模型，`Engine::analyze` 接受 RGB 图像并返回 `Page` 与 `AnalysisMetadata`，结果可直接交给核心库擦字、翻译和排版。
-- `crates/camel-project/`：项目文件格式与不涉及文件读写的操作，包括页面记录、原图校验、人工编辑、渲染决策和翻译计划修复；CLI 与工作台共用。
-- `crates/camel-web/`：工作台使用的 WebAssembly 接口。
-- `crates/camel-cli/`：命令行，负责文件读写和模型 API 调用。
+- `crates/camel-project/`：项目文件格式和完整流水线（分析、场景规划、翻译、审校、术语与排版检查、导出、人工编辑、翻译计划修复）。文件读写、网络请求、计时和进度输出都通过 `host::Host` 交给调用方实现；CLI 与工作台共用。
+- `crates/camel-web/`：工作台使用的 WebAssembly 接口，用浏览器的文件、网络和计时实现 `Host`。
+- `crates/camel-cli/`：命令行，用本地文件和 ureq 实现 `Host`。
 
 ```rust,no_run
 use camel_vision::Engine;
