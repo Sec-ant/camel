@@ -1,20 +1,28 @@
 // A project opened in the browser: page summaries and revisions, page documents, previews,
 // edits with compare-and-swap writes, client-side undo/redo, translation-plan repair, and
-// polling for changes made outside the workbench (direct tier).
+// re-reading records changed by pipeline jobs or outside the workbench.
 
 import { call } from "./engine.ts";
-import {
-  ConflictError,
-  type Edit,
-  type EditResult,
-  type PageDocument,
-  type PageSummary,
-  type Patch,
-  type Preview,
-  type Project,
+import type {
+  Edit,
+  EditResult,
+  PageDocument,
+  PageSummary,
+  Patch,
+  Preview,
+  Project,
 } from "./model.ts";
 import { type RecordSummary, referenceIndex } from "./protocol.ts";
-import { type FontData, type ProjectFiles, type StoredText, tier } from "./storage/files.ts";
+import {
+  type ComicFiles,
+  type FontData,
+  type ProjectFiles,
+  type StoredText,
+  directoryEntries,
+  download,
+} from "./storage/files.ts";
+import { HostError } from "./storage/store.ts";
+import { zipBlob } from "./storage/zip.ts";
 
 const HISTORY_LIMIT = 50;
 const READ_BATCH = 48;
@@ -29,9 +37,23 @@ interface PageState {
 
 export interface OpenOptions {
   readonly files: ProjectFiles;
-  readonly comicPages: readonly string[] | null;
+  readonly comic: { readonly files: ComicFiles; readonly pages: readonly string[] } | null;
   readonly font: FontData;
   readonly onProgress: (done: number, total: number) => void;
+}
+
+/**
+ * Where the project lives: a folder on disk (Chromium), a read-only upload with edits kept in
+ * this browser ("overlay"), or this browser's private storage ("browser", new projects in
+ * Firefox and Safari).
+ */
+export type ProjectLocation = "folder" | "overlay" | "browser";
+
+async function locate(files: ProjectFiles): Promise<ProjectLocation> {
+  const { descriptor } = files.store;
+  if (descriptor.kind === "overlay") return "overlay";
+  const root = await navigator.storage.getDirectory();
+  return (await root.resolve(descriptor.handle)) ? "browser" : "folder";
 }
 
 /** Index file names of a project folder; throws a user-facing error when it is not one. */
@@ -54,10 +76,13 @@ function sniff(bytes: ArrayBuffer): string {
 
 export class Session {
   readonly files: ProjectFiles;
+  readonly location: ProjectLocation;
+  /** The comic chosen for this session; pipeline jobs read pages from it. */
+  readonly comic: ComicFiles | null;
+  readonly font: FontData;
   readonly #index: readonly string[];
   readonly #pages: PageState[];
   readonly #comicPages: readonly string[] | null;
-  readonly #font: string;
   readonly #source: string;
   #plan: StoredText | null;
   #project: Project | null = null;
@@ -69,16 +94,19 @@ export class Session {
 
   private constructor(
     options: OpenOptions,
+    location: ProjectLocation,
     index: readonly string[],
     pages: PageState[],
     source: string,
     plan: StoredText | null,
   ) {
     this.files = options.files;
+    this.location = location;
+    this.comic = options.comic?.files ?? null;
+    this.font = options.font;
     this.#index = index;
     this.#pages = pages;
-    this.#comicPages = options.comicPages;
-    this.#font = options.font.name;
+    this.#comicPages = options.comic?.pages ?? null;
     this.#source = source;
     this.#plan = plan;
   }
@@ -121,18 +149,19 @@ export class Session {
     } catch {
       sourcePath = "";
     }
-    return new Session(options, index, pages, sourcePath, plan);
+    return new Session(options, await locate(files), index, pages, sourcePath, plan);
   }
 
-  get tier(): typeof tier {
-    return tier;
+  /** Record file names in index.json order. */
+  get index(): readonly string[] {
+    return this.#index;
   }
 
   project(): Project {
     this.#project ??= {
       name: this.files.name,
       source: this.#source,
-      font: this.#font,
+      font: this.font.name,
       pages: this.#pages.map((page, index): PageSummary => ({
         index,
         file: this.#index[index]!,
@@ -156,9 +185,8 @@ export class Session {
     return name ?? this.#index[index]!;
   }
 
-  /** Direct tier: re-reads records whose file changed on disk (e.g. a running `camel translate`). */
+  /** Re-reads records whose file changed (a pipeline job, or `camel translate` on the folder). */
   async poll(): Promise<Project> {
-    if (tier !== "direct") return this.project();
     const changed: number[] = [];
     for (let start = 0; start < this.#index.length; start += READ_BATCH * 4) {
       const names = this.#index.slice(start, start + READ_BATCH * 4);
@@ -270,7 +298,7 @@ export class Session {
 
   async #current(index: number, revision: string): Promise<StoredText> {
     const record = await this.#record(index);
-    if (record.revision !== revision) throw new ConflictError("The page changed since it was opened");
+    if (record.revision !== revision) throw new HostError("conflict", "The page changed since it was opened");
     return record;
   }
 
@@ -341,23 +369,26 @@ export class Session {
     return this.#restore(index, revision, this.#redo, this.#undo);
   }
 
-  /** Snapshot tier: number of locally edited files. */
+  /** Overlay: number of locally edited files. */
   async changeCount(): Promise<number> {
-    return (await this.files.changes()).length;
+    return (await this.files.store.changes()).length;
   }
 
-  /** Snapshot tier: downloads the locally edited files as camel-edits-<project>.zip. */
+  /** Overlay: downloads the locally edited files as camel-edits-<project>.zip. */
   async downloadChanges(): Promise<void> {
-    const paths = await this.files.changes();
-    const encoder = new TextEncoder();
-    const contents = await Promise.all(
-      paths.map(async (path) => encoder.encode((await this.files.read(path))!.text).buffer as ArrayBuffer),
+    const entries = await Promise.all(
+      (await this.files.store.changes()).map(async (path) => ({
+        path,
+        data: new Blob([(await this.files.store.read(path))!.bytes as Uint8Array<ArrayBuffer>]),
+      })),
     );
-    const zip = await call("zip", { paths, contents }, contents);
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
-    link.download = `camel-edits-${this.files.name}.zip`;
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
+    download(await zipBlob(entries), `camel-edits-${this.files.name}.zip`);
+  }
+
+  /** Browser project: downloads every project file as <project>.zip. */
+  async downloadProject(): Promise<void> {
+    const { descriptor } = this.files.store;
+    if (descriptor.kind !== "directory") throw new Error("Only projects kept in this browser can be downloaded whole");
+    download(await zipBlob(await directoryEntries(descriptor.handle)), `${this.files.name}.zip`);
   }
 }

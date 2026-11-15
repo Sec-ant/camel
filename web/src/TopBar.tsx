@@ -1,8 +1,13 @@
-// Title bar and the toolbar row: page readouts, warnings, save state, navigation, undo/redo.
+// Title bar (screens, running job) and the toolbar row: page readouts, warnings, save state,
+// navigation, undo/redo.
 
 import { useEffect, useState } from "preact/hooks";
+import { currentJob, jobRunning, jobVersion } from "./pipeline/jobs.ts";
 import {
+  type View,
+  activeSession,
   doc,
+  downloadProject,
   discardChanges,
   downloadChanges,
   flushFields,
@@ -19,8 +24,8 @@ import {
   stepFilteredPage,
   stepPage,
   undo,
+  view,
 } from "./state.ts";
-import { tier } from "./storage/files.ts";
 
 const SAVE_LABELS = {
   idle: "",
@@ -33,36 +38,73 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function ScreenLink({ target, label }: { target: View; label: string }) {
+  const current = view.value === target;
+  return (
+    <button
+      type="button"
+      class="title-link"
+      aria-current={current ? "page" : undefined}
+      onClick={() => (view.value = current && target !== "main" ? "main" : target)}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** "TRANSLATE 34 / 120" while a job runs. */
+function JobBadge() {
+  void jobVersion.value;
+  const job = currentJob.value;
+  if (!job || !jobRunning()) return null;
+  const { finished, total } = job.progress.units;
+  return (
+    <span class="title-job mono" aria-live="polite">
+      {job.title.toUpperCase()} {finished} / {total}
+    </span>
+  );
+}
+
 export function TitleBar() {
+  const open = project.value;
   return (
     <header class="titlebar">
       <h1 class="mono">
         Camel workbench
-        {project.value && <span class="title-project">{project.value.name}</span>}
+        {open && <span class="title-project">{open.name}</span>}
       </h1>
       <span class="title-links">
-        {project.value && (
+        <JobBadge />
+        <nav class="title-nav" aria-label="Screens">
+          <ScreenLink target="main" label={open ? "Workbench" : "Projects"} />
+          {open && <ScreenLink target="jobs" label="Jobs" />}
+          <ScreenLink target="settings" label="Settings" />
+        </nav>
+        {open && (
           <button
             type="button"
             class="title-link"
-            onClick={() =>
+            onClick={() => {
+              if (jobRunning() && !confirm("A job is running. Leaving stops it; running it again resumes. Leave?")) return;
               void flushFields().then(() => {
                 location.href = location.pathname;
-              })
-            }
+              });
+            }}
           >
             Open another project
           </button>
         )}
-        <button
-          type="button"
-          class="title-link"
-          aria-expanded={helpOpen.value}
-          aria-controls="shortcut-sheet"
-          onClick={() => (helpOpen.value = !helpOpen.value)}
-        >
-          Keyboard shortcuts (?)
-        </button>
+        {open && view.value === "main" && (
+          <button
+            type="button"
+            class="title-link"
+            aria-expanded={helpOpen.value}
+            aria-controls="shortcut-sheet"
+            onClick={() => (helpOpen.value = !helpOpen.value)}
+          >
+            Keyboard shortcuts (?)
+          </button>
+        )}
       </span>
     </header>
   );
@@ -110,7 +152,7 @@ export function Toolbar() {
         <span class="save-state mono" data-state={state} aria-live="polite">
           {SAVE_LABELS[state]}
         </span>
-        {tier === "snapshot" && (
+        {activeSession()?.location === "overlay" && (
           <button
             type="button"
             class="button"
@@ -121,9 +163,19 @@ export function Toolbar() {
             Download changes ({localChanges.value})
           </button>
         )}
-        {tier === "snapshot" && localChanges.value > 0 && (
+        {activeSession()?.location === "overlay" && localChanges.value > 0 && (
           <button type="button" class="link" onClick={() => void discardChanges()}>
             Discard
+          </button>
+        )}
+        {activeSession()?.location === "browser" && (
+          <button
+            type="button"
+            class="button"
+            title="Download the project kept in this browser as a zip"
+            onClick={() => void downloadProject()}
+          >
+            Download project
           </button>
         )}
         <button

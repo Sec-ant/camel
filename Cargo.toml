@@ -36,6 +36,7 @@ thiserror = { version = "2", default-features = false }
 tiny_http = { version = "0.12", default-features = false }
 ureq = { version = "3", default-features = false }
 wasm-bindgen = { version = "=0.2.129", default-features = false }
+wasm-bindgen-futures = { version = "=0.4.79", default-features = false }
 zip = { version = "7.2", default-features = false }
 
 [workspace.lints.rust]
@@ -131,4 +132,18 @@ panic = "abort"
 strip = "none"
 
 [profile.web.package.camel]
+opt-level = 3
+# In-browser page analysis is inference-bound: opt-level 3 here cuts it by
+# about 40% for ~0.7 MB more wasm.
+[profile.web.package.camel-vision]
+opt-level = 3
+[profile.web.package.rten]
+opt-level = 3
+[profile.web.package.rten-gemm]
+opt-level = 3
+[profile.web.package.rten-tensor]
+opt-level = 3
+[profile.web.package.rten-vecmath]
+opt-level = 3
+[profile.web.package.rten-simd]
 opt-level = 3

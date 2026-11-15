@@ -1,6 +1,8 @@
 // Minimal promise wrapper over one IndexedDB object store of string keys. Holds persisted file
-// handles and recent projects (Chromium), the remembered font, and the snapshot-tier edit
-// overlay.
+// handles and recent projects (Chromium), the remembered font, service settings and API key,
+// and the snapshot-tier write overlay. Usable from the main thread and from workers.
+
+import type { KeyValue } from "./store.ts";
 
 const DATABASE = "camel-workbench";
 const STORE = "kv";
@@ -46,3 +48,6 @@ export async function idbKeys(prefix: string): Promise<string[]> {
   const keys = await run("readonly", (store) => store.getAllKeys(range));
   return keys.map(String);
 }
+
+/** The key-value store the snapshot-tier overlay writes to (same database in every worker). */
+export const idbKeyValue: KeyValue = { get: idbGet, set: idbSet, delete: idbDelete, keys: idbKeys };

@@ -16,11 +16,12 @@ camel-project.workspace = true
 image = { workspace = true, features = ["png", "jpeg"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
-zip.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+camel-vision.workspace = true
 js-sys = { workspace = true, features = ["std"] }
 wasm-bindgen = { workspace = true, features = ["std"] }
+wasm-bindgen-futures = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io::Cursor, path::PathBuf};
 
 use camel_project::plan::{Scene, fingerprint};
 use image::{Rgb, RgbImage};
@@ -159,18 +159,4 @@ fn plan_repair_follows_a_source_correction() {
     assert_ne!(repaired.fingerprint, plan.fingerprint);
     let stale = repair_plan(&plan_json, &index_json, &keys_json, &keys_json, 0).unwrap_err();
     assert!(stale.contains("run camel prepare"), "{stale}");
-}
-
-#[test]
-fn zip_files_stores_each_path() {
-    let archive = zip_files(&[
-        ("00001.json".into(), b"{}\n".to_vec()),
-        ("translation-plan.json".into(), b"[]\n".to_vec()),
-    ])
-    .unwrap();
-    let mut zip = zip::ZipArchive::new(Cursor::new(archive)).unwrap();
-    assert_eq!(zip.len(), 2);
-    let mut text = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("00001.json").unwrap(), &mut text).unwrap();
-    assert_eq!(text, "{}\n");
 }

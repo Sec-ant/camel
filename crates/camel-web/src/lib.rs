@@ -1,15 +1,16 @@
 //! WebAssembly bindings for the Camel proofreading workbench.
 //!
-//! The browser workbench runs this crate in a Web Worker. Every function
-//! takes and returns JSON strings or bytes, so the same operations run
-//! natively in tests and in the browser; `wasm` adds the JavaScript glue.
+//! The browser workbench runs this crate in Web Workers. The workbench
+//! functions take and return JSON strings or bytes, so they run natively in
+//! tests and in the browser; `wasm` adds their JavaScript glue, and `pipeline`
+//! runs the `camel-project` pipeline operations against JavaScript hosts.
 
 mod document;
+#[cfg(target_arch = "wasm32")]
+mod pipeline;
 mod preview;
 #[cfg(target_arch = "wasm32")]
 mod wasm;
-
-use std::io::{Cursor, Write as _};
 
 use camel::layout::Typesetter;
 use camel_project::{
@@ -111,29 +112,6 @@ pub fn repair_plan(
     let plan =
         repair(plan, &index, &previous, &keys, position).map_err(|error| error.to_string())?;
     json_text(&plan)
-}
-
-/// Builds an uncompressed ZIP archive of `(path, bytes)` entries.
-///
-/// # Errors
-///
-/// Fails for duplicate or invalid paths.
-pub fn zip_files(entries: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
-    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let options =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    for (path, bytes) in entries {
-        writer
-            .start_file(path.as_str(), options)
-            .map_err(|error| format!("Cannot add {path}: {error}"))?;
-        writer
-            .write_all(bytes)
-            .map_err(|error| format!("Cannot add {path}: {error}"))?;
-    }
-    writer
-        .finish()
-        .map(Cursor::into_inner)
-        .map_err(|error| error.to_string())
 }
 
 /// Typesetting state shared by previews of one project.

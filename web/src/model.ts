@@ -130,6 +130,3 @@ export interface EditResult {
   /** The record was saved but a follow-up step (translation-plan repair) failed. */
   readonly warning?: string | undefined;
 }
-
-/** The project file changed since it was read (another tab or `camel translate`). */
-export class ConflictError extends Error {}
