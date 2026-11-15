@@ -93,6 +93,12 @@ pub enum Edit {
         /// Unresolved candidate ID.
         unresolved: u32,
     },
+    /// Drops an unresolved OCR candidate that is not lettering, along with its
+    /// page issue; the initial OCR evidence stays in the analysis.
+    DismissUnresolved {
+        /// Unresolved candidate ID.
+        unresolved: u32,
+    },
     /// Deletes a region; its initial OCR evidence stays in the analysis.
     RemoveRegion {
         /// Region ID.
@@ -198,6 +204,18 @@ pub fn apply(
                     .created
                     .push(promote_unresolved(record, image, unresolved)?);
                 applied.plan_changed = true;
+            }
+            Edit::DismissUnresolved { unresolved } => {
+                let known = record.analysis.as_ref().is_some_and(|analysis| {
+                    analysis
+                        .unresolved_regions
+                        .iter()
+                        .any(|candidate| candidate.block.id == unresolved)
+                });
+                if !known {
+                    return Err(EditError::UnknownUnresolved(unresolved));
+                }
+                resolve_unresolved(record, unresolved);
             }
             Edit::RemoveRegion { region } => {
                 remove_region(record, region)?;
@@ -888,6 +906,36 @@ mod tests {
             apply(
                 &mut record,
                 vec![Edit::PromoteUnresolved { unresolved: 6 }],
+                &mut white
+            ),
+            Err(EditError::UnknownUnresolved(6))
+        ));
+    }
+
+    #[test]
+    fn dismissing_a_candidate_removes_it_and_its_issue_but_keeps_the_ocr_evidence() {
+        let mut record = record();
+        let evidence = record.analysis.as_ref().unwrap().initial_ocr.len();
+        apply(
+            &mut record,
+            vec![Edit::DismissUnresolved { unresolved: 6 }],
+            &mut white,
+        )
+        .unwrap();
+        let analysis = record.analysis.as_ref().unwrap();
+        assert!(analysis.unresolved_regions.is_empty());
+        assert_eq!(analysis.initial_ocr.len(), evidence);
+        assert!(
+            !record
+                .issues
+                .iter()
+                .any(|issue| issue.starts_with("unresolved text"))
+        );
+        assert_eq!(record.page.regions.len(), 2);
+        assert!(matches!(
+            apply(
+                &mut record,
+                vec![Edit::DismissUnresolved { unresolved: 6 }],
                 &mut white
             ),
             Err(EditError::UnknownUnresolved(6))

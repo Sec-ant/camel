@@ -122,6 +122,7 @@ export type Edit =
       readonly translation: string | null;
     }
   | { readonly op: "promote_unresolved"; readonly unresolved: number }
+  | { readonly op: "dismiss_unresolved"; readonly unresolved: number }
   | { readonly op: "remove_region"; readonly region: number };
 
 export interface EditResult {
