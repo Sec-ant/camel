@@ -774,6 +774,19 @@ function PageSection({ page }: { page: PageDocument }) {
                 >
                   Promote
                 </button>
+                <button
+                  type="button"
+                  class="button small"
+                  title="Not lettering: remove it from the to-do list"
+                  onFocus={() => (hoveredUnresolved.value = candidate.id)}
+                  onBlur={() => (hoveredUnresolved.value = null)}
+                  onClick={() => {
+                    hoveredUnresolved.value = null;
+                    void submit([{ op: "dismiss_unresolved", unresolved: candidate.id }]);
+                  }}
+                >
+                  Dismiss
+                </button>
                 <span class="helper">{candidate.reason}</span>
               </li>
             ))}
