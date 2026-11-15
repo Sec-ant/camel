@@ -270,20 +270,28 @@ pub fn overlaps_original(active: &camel::Region, original: &camel::Region) -> bo
         .iter()
         .chain(&active.bubble.erase)
         .any(|span| {
-            (bounds.width > 0
-                && bounds.height > 0
-                && span.y >= bounds.y
-                && span.y < bounds.bottom()
-                && span.start < bounds.right()
-                && bounds.x < span.end)
-                || original
-                    .bubble
-                    .erase
+            let intersects = |bounds: camel::Rect| {
+                bounds.width > 0
+                    && bounds.height > 0
+                    && span.y >= bounds.y
+                    && span.y < bounds.bottom()
+                    && span.start < bounds.right()
+                    && bounds.x < span.end
+            };
+            (if original.block.words.is_empty() {
+                intersects(bounds)
+            } else {
+                original
+                    .block
+                    .words
                     .iter()
-                    .chain(&original.bubble.glyphs)
-                    .any(|other| {
-                        span.y == other.y && span.start < other.end && other.start < span.end
-                    })
+                    .any(|word| intersects(word.bounds))
+            }) || original
+                .bubble
+                .erase
+                .iter()
+                .chain(&original.bubble.glyphs)
+                .any(|other| span.y == other.y && span.start < other.end && other.start < span.end)
         })
 }
 
@@ -293,4 +301,57 @@ pub fn native_glyph_masks(analysis: Option<&AnalysisMetadata>) -> bool {
     analysis
         .and_then(|metadata| metadata.ocr_engine.as_deref())
         .is_some_and(|engine| engine.starts_with("pp-ocr-ctc"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overlaps_original;
+    use camel::Region;
+    use serde_json::json;
+
+    #[test]
+    fn retained_text_protects_words_without_blocking_empty_corners() {
+        let region = |interior: serde_json::Value, words: serde_json::Value| -> Region {
+            serde_json::from_value(json!({
+                "block": {"id": 0, "text": "text", "bounds": {"x": 0, "y": 0, "width": 30, "height": 30}, "words": words},
+                "bubble": {"bounds": {"x": 0, "y": 0, "width": 30, "height": 30}, "interior": interior, "erase": [], "background": [255, 255, 255]},
+                "translation": null
+            })).unwrap()
+        };
+        let original = region(
+            json!([]),
+            json!([
+                {"text": "A", "bounds": {"x": 0, "y": 0, "width": 5, "height": 5}, "confidence": 99.0, "line": 0},
+                {"text": "B", "bounds": {"x": 20, "y": 10, "width": 5, "height": 5}, "confidence": 99.0, "line": 1}
+            ]),
+        );
+        assert!(!overlaps_original(
+            &region(json!([[10, 10, 15]]), json!([])),
+            &original
+        ));
+        assert!(overlaps_original(
+            &region(json!([[10, 20, 23]]), json!([])),
+            &original
+        ));
+        let mut with_mask = original.clone();
+        with_mask.bubble.erase = vec![camel::Span {
+            y: 10,
+            start: 10,
+            end: 15,
+        }];
+        assert!(overlaps_original(
+            &region(json!([[10, 10, 15]]), json!([])),
+            &with_mask
+        ));
+        with_mask.bubble.glyphs = std::mem::take(&mut with_mask.bubble.erase);
+        assert!(overlaps_original(
+            &region(json!([[10, 10, 15]]), json!([])),
+            &with_mask
+        ));
+        let without_words = region(json!([]), json!([]));
+        assert!(overlaps_original(
+            &region(json!([[10, 10, 15]]), json!([])),
+            &without_words
+        ));
+    }
 }

@@ -107,10 +107,11 @@ fn line_support(block: &TextBlock, word: &Word) -> usize {
 fn fragment(part: &Word, full: &Word) -> bool {
     let a = part.bounds;
     let b = full.bounds;
+    let vertical_overlap = a.bottom().min(b.bottom()).saturating_sub(a.y.max(b.y));
     !part.text.is_empty()
         && part.text.len() < full.text.len()
-        && a.y == b.y
-        && a.height == b.height
+        && a.height > 0
+        && u64::from(vertical_overlap) * 10 >= u64::from(a.height.max(b.height)) * 9
         && a.width > 0
         && a.width < b.width
         && a.x >= b.x
@@ -175,6 +176,33 @@ mod tests {
         assert_eq!(blocks[0].bounds, blocks[0].words[0].bounds);
         assert_eq!(blocks[1].text, "TELL ME.");
         assert_eq!(blocks[1].id, 1);
+    }
+
+    #[test]
+    fn clipped_neighbor_with_a_slightly_different_height_is_removed() {
+        let mut first = block(0, &[("SKULL!", 261, 883, 153), ("YO", 526, 886, 38)]);
+        first.words[0].bounds.height = 28;
+        first.words[1].bounds.height = 23;
+        let mut second = block(1, &[("YOU", 526, 886, 63), ("REMEMBER", 474, 908, 189)]);
+        second.words[0].bounds.height = 24;
+        second.words[1].bounds.height = 31;
+        let mut blocks = vec![first, second];
+        reconcile(&mut blocks);
+        assert_eq!(blocks[0].text, "SKULL!");
+        assert_eq!(blocks[0].bounds, blocks[0].words[0].bounds);
+        assert_eq!(blocks[1].text, "YOU REMEMBER");
+    }
+
+    #[test]
+    fn similar_prefix_on_a_separate_baseline_is_retained() {
+        let mut blocks = vec![
+            block(0, &[("YO", 526, 886, 38)]),
+            block(1, &[("YOU", 526, 893, 63)]),
+        ];
+        reconcile(&mut blocks);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].text, "YO");
+        assert_eq!(blocks[1].text, "YOU");
     }
 
     #[test]
