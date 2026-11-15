@@ -1,6 +1,6 @@
 use super::{plan::save_edited, read, source::ProjectSource};
 use anyhow::{Context as _, Result, bail, ensure};
-use camel::{Rect, Span, mask, translation::Exchange};
+use camel::{Rect, Span, mask};
 use camel_project::{Record, edit};
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::Path};
@@ -215,8 +215,8 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
         );
     }
     let mut geometry = edit::new_geometry(&panels, &region, &record.page);
-    geometry.corrected_source = Some(target_source.clone());
-    let split_speaker = req
+    geometry.corrected_source = Some(target_source);
+    geometry.speaker = req
         .split
         .as_ref()
         .and_then(|s| {
@@ -229,34 +229,6 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
                 .find(|g| g.region_id == s.region)
         })
         .and_then(|g| g.speaker.clone());
-    geometry.speaker.clone_from(&split_speaker);
-    if let (Some(split), Some(context)) = (&req.split, &mut record.context) {
-        let matches: Vec<_> = context
-            .recent
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| {
-                e.source == split.original_source && e.target == split.original_translation
-            })
-            .map(|(i, _)| i)
-            .collect();
-        if let [i] = matches.as_slice() {
-            let exchange = &mut context.recent[*i];
-            exchange.source.clone_from(&split.remaining_source);
-            exchange.target.clone_from(&split.remaining_translation);
-        } else if !matches.is_empty() {
-            bail!("ambiguous split context");
-        }
-    }
-    edit::remember_inserted(
-        &mut record,
-        insertion,
-        Exchange {
-            source: target_source,
-            target: req.translation.clone(),
-            speaker: split_speaker,
-        },
-    );
     if let Some(split) = &req.split {
         let old = record
             .page

@@ -7,14 +7,13 @@
 
 use std::collections::BTreeSet;
 
+use camel::translation::MAX_SUMMARY_CHARS;
 use serde::{Deserialize, Serialize};
 
 use crate::Record;
 
 /// Pages a planning request sends together; repairs invalidate whole batches.
 pub const BATCH_PAGES: usize = 8;
-/// Longest accepted scene summary in Unicode scalar values.
-pub const MAX_SUMMARY_CHARS: usize = 600;
 /// Summary written to scenes whose source changed after planning.
 pub const INVALIDATED_SUMMARY: &str = "修复后无可用场景摘要";
 

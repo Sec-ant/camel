@@ -1,5 +1,6 @@
 mod batch;
 mod config;
+mod files;
 mod host;
 mod project;
 
@@ -221,9 +222,9 @@ impl Service {
         }
     }
 
-    fn api_key(&self) -> Result<String, String> {
+    fn api_key(&self) -> Result<camel_project::ApiKey, String> {
         if let Ok(value) = std::env::var("CAMEL_API_KEY") {
-            return Ok(value);
+            return Ok(camel_project::ApiKey::new(value));
         }
         let path = self
             .api_key_file
@@ -231,6 +232,7 @@ impl Service {
             .or_else(|| config::config_dir().map(|path| path.join("api-key")))
             .ok_or("set CAMEL_API_KEY or --api-key-file")?;
         std::fs::read_to_string(&path)
+            .map(camel_project::ApiKey::new)
             .map_err(|error| format!("read API key from {}: {error}", path.display()))
     }
 }

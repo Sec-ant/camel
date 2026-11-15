@@ -57,7 +57,7 @@ fn fixture() -> (TempDir, Value) {
     let block =
         json!({"id":0,"bounds":{"x":20,"y":20,"width":20,"height":10},"words":[old],"text":"OLD"});
     let unresolved = json!({"id":1,"bounds":{"x":20,"y":20,"width":135,"height":65},"words":[old,new],"text":"OLD NEW"});
-    let page = json!({"source":reference,"page":{"width":240,"height":160,"regions":[{"block":block,"bubble":{"bounds":{"x":10,"y":10,"width":50,"height":30},"interior":[],"erase":[],"background":[255,255,255]},"translation":"旧"}]},"context":{"glossary":{},"recent":[{"source":"OLD","target":"旧"}]},"translated_source":[[0,"OLD"]],"issues":["unresolved text at 20,20: fixture"],"analysis":{"schema_version":1,"coordinate_system":"image_pixels_top_left","panels":[{"id":0,"bounds":{"x":0,"y":0,"width":240,"height":160},"contour":[]}],"initial_ocr":[block,unresolved],"regions":[{"region_id":0,"panel_id":0,"contours":[]}],"unresolved_regions":[{"block":unresolved,"reason":"fixture"}]}});
+    let page = json!({"source":reference,"page":{"width":240,"height":160,"regions":[{"block":block,"bubble":{"bounds":{"x":10,"y":10,"width":50,"height":30},"interior":[],"erase":[],"background":[255,255,255]},"translation":"旧"}]},"context":{"glossary":{}},"translated_source":[[0,"OLD"]],"issues":[{"kind": "unresolved_text", "x": 20, "y": 20, "reason": "fixture"}],"analysis":{"schema_version":1,"coordinate_system":"image_pixels_top_left","panels":[{"id":0,"bounds":{"x":0,"y":0,"width":240,"height":160},"contour":[]}],"initial_ocr":[block,unresolved],"regions":[{"region_id":0,"panel_id":0,"contours":[]}],"unresolved_regions":[{"block":unresolved,"reason":"fixture"}]}});
     write(&root.join("00001.json"), &page);
     write(
         &root.join("source.json"),
@@ -113,7 +113,6 @@ fn splits_a_previously_combined_translation() {
     let mut page = read(&p);
     page["page"]["regions"][0]["translation"] = json!("旧新");
     page["analysis"]["regions"][0]["corrected_source"] = json!("OLD NEW");
-    page["context"]["recent"][0] = json!({"source":"OLD NEW","target":"旧新"});
     write(&p, &page);
     r["split"] = json!({"region":0,"original_source":"OLD NEW","original_translation":"旧新","remaining_source":"OLD","remaining_translation":"旧"});
     let path = d.path().join("request.json");
@@ -129,7 +128,6 @@ fn splits_a_previously_combined_translation() {
     assert_eq!(after["page"]["regions"][1]["translation"], "新");
     assert_eq!(after["analysis"]["regions"][0]["corrected_source"], "OLD");
     assert_eq!(after["analysis"]["regions"][1]["corrected_source"], "NEW");
-    assert_eq!(after["context"]["recent"][1]["source"], "NEW");
 }
 
 #[test]
@@ -207,7 +205,7 @@ fn repairs_a_filtered_page_without_erasing_its_review_status() {
     record["issues"]
         .as_array_mut()
         .unwrap()
-        .push(json!("translation context affected by content_filter"));
+        .push(json!({"kind":"content_filter_context"}));
     write(&page, &record);
     let request_path = dir.path().join("request.json");
     write(&request_path, &request);
@@ -224,6 +222,6 @@ fn repairs_a_filtered_page_without_erasing_its_review_status() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|issue| { issue == "translation context affected by content_filter" })
+            .any(|issue| { issue["kind"] == "content_filter_context" })
     );
 }

@@ -116,11 +116,11 @@ fn check_terms_reports_recorded_page_conflicts_without_inventing_regions() {
     let page = json!({
         "source": "@259:unused",
         "page": {"width":100,"height":100,"regions":[region(0, "ITANGSTROM IS HERE", Some("他来了"))]},
-        "issues": [conflict, "translation context affected by content_filter", scene_conflict]
+        "issues": [{"kind":"confirmed_term_conflict","source":"Angstrom","confirmed":"安斯特罗姆","proposed":"安格斯特姆"}, {"kind":"content_filter_context"}, {"kind":"scene_term_conflicts","conflicts":[{"source":"Angstrom","first":"安斯特罗姆","second":"安格斯特姆"}]}]
     });
     let preserved = json!({
         "source":"@260:unused", "preserve_original":true,
-        "page":{"width":100,"height":100,"regions":[]}, "issues":[conflict]
+        "page":{"width":100,"height":100,"regions":[]}, "issues":[{"kind":"confirmed_term_conflict","source":"Angstrom","confirmed":"安斯特罗姆","proposed":"安格斯特姆"}]
     });
     write(&project.join("00260.json"), &page);
     write(&project.join("00261.json"), &preserved);

@@ -7,9 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Record,
-    error::{Error, chain, fail},
+    error::{Error, chain},
     host::{Event, Host, PageSource, PageTask},
-    is_content_filter_issue,
     render::{RetainReason, plan_page},
     store::{page_image, read_json, read_optional_json},
 };
@@ -17,30 +16,46 @@ use crate::{
 /// Results of checking the same page layouts used by rendering, without erasing images.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayoutReport {
+    /// Report format version; currently 1.
     pub schema_version: u32,
     /// The font file the layouts were checked with.
     pub font: String,
+    /// One entry per page in project order.
     pub pages: Vec<LayoutReportPage>,
 }
 
+/// The layout check of one page.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayoutReportPage {
+    /// Page record file name.
     pub page: String,
+    /// Whether the page could be laid out at all; `false` comes with a
+    /// `page_error` issue.
     pub checked: bool,
+    /// Regions that were typeset, with the font size chosen.
     pub regions: Vec<LayoutRegion>,
+    /// Problems found on the page.
     pub issues: Vec<LayoutIssue>,
 }
 
+/// A typeset region and its chosen font size.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayoutRegion {
+    /// Region ID.
     pub region_id: u32,
+    /// Font size in original-image pixels.
     pub font_size: u32,
 }
 
+/// A layout problem on a page or region.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayoutIssue {
+    /// Problem class, such as `no_fit`, `missing_glyph`, `untranslated`,
+    /// `content_filter` or `page_error`.
     pub kind: String,
+    /// The region concerned; `None` for page-level issues.
     pub region_id: Option<u32>,
+    /// Human-readable details.
     pub detail: Option<String>,
 }
 
@@ -83,12 +98,14 @@ fn inspect_page(
     }
     result.checked = true;
     for text in &record.issues {
-        let kind = if is_content_filter_issue(text) {
+        let kind = if text.is_content_filter() {
             "content_filter"
         } else {
             "source_issue"
         };
-        result.issues.push(issue(kind, None, Some(text.clone())));
+        result
+            .issues
+            .push(issue(kind, None, Some(text.to_string())));
     }
     let plan = plan_page(record, |page, anchors| {
         typesetter.text_layers(image, page, LayoutOptions::default(), anchors)
@@ -207,9 +224,6 @@ pub async fn check_layout(
         let page = async {
             let record: Record = read_json(host, name).await?;
             let image = page_image(pages, &record.source)?;
-            if image.dimensions() != (record.page.width, record.page.height) {
-                return fail("source dimensions changed");
-            }
             Ok(inspect_page(name, &record, &image, &typesetter))
         }
         .await

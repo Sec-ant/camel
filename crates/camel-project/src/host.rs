@@ -22,8 +22,14 @@ pub trait Host {
     /// Reads a project file; `None` when it does not exist.
     async fn read(&self, path: &str) -> Result<Option<Vec<u8>>, HostError>;
 
-    /// An opaque revision of a project file that changes on every write;
-    /// `None` when it does not exist.
+    /// An opaque revision of a project file; `None` when it does not exist.
+    ///
+    /// Hosts derive it from file metadata, not content, so it is a change
+    /// detector rather than a version number: it changes when the file is
+    /// replaced, except when a replacement happens to reproduce all the
+    /// metadata the host uses (see each host). [`WriteMode::ReplaceIfRevision`]
+    /// compares it before replacing, which narrows but need not close the
+    /// window for a concurrent writer.
     async fn revision(&self, path: &str) -> Result<Option<String>, HostError>;
 
     /// Atomically writes a project file, creating missing parent directories.
@@ -69,8 +75,9 @@ pub enum WriteMode {
     ReplaceIfRevision(String),
 }
 
-/// An HTTP POST request with a JSON body.
-#[derive(Clone, Debug)]
+/// An HTTP POST request with a JSON body. `Debug` output redacts the
+/// `Authorization` header.
+#[derive(Clone)]
 pub struct HttpRequest {
     /// Absolute URL.
     pub url: String,
@@ -80,6 +87,29 @@ pub struct HttpRequest {
     pub body: Vec<u8>,
     /// Limit for the whole exchange, including reading the response.
     pub timeout: Duration,
+}
+
+impl std::fmt::Debug for HttpRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let headers: Vec<_> = self
+            .headers
+            .iter()
+            .map(|(name, value)| {
+                let value = if name.eq_ignore_ascii_case("authorization") {
+                    "<redacted>"
+                } else {
+                    value.as_str()
+                };
+                (name.as_str(), value)
+            })
+            .collect();
+        f.debug_struct("HttpRequest")
+            .field("url", &self.url)
+            .field("headers", &headers)
+            .field("body_bytes", &self.body.len())
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 /// The response to an [`HttpRequest`]; any status, including errors.

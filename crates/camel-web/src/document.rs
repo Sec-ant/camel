@@ -59,7 +59,7 @@ pub(crate) struct PageDocument<'a> {
     preserve_original: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     scene_summary: Option<&'a str>,
-    issues: &'a [String],
+    issues: Vec<String>,
     panels: Vec<PanelView>,
     regions: Vec<RegionView<'a>>,
     unresolved: Vec<UnresolvedView<'a>>,
@@ -204,7 +204,7 @@ impl<'a> PageDocument<'a> {
                         .as_ref()
                         .and_then(|context| context.scene_summary.as_deref())
                 }),
-            issues: &record.issues,
+            issues: record.issues.iter().map(ToString::to_string).collect(),
             panels: analysis
                 .into_iter()
                 .flat_map(|analysis| &analysis.panels)

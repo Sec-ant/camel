@@ -10,8 +10,8 @@ use camel::{
     Page,
     analysis::{AnalysisMetadata, RegionGeometry},
     translation::{
-        Context, TranslationError, Translator, VisualCrop, VisualInput, remember_page,
-        translate_missing_page_with_crops,
+        Context, TranslationError, Translator, VisualCrop, VisualInput, match_text, remember_page,
+        template_uses, translate_missing_page,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -19,9 +19,10 @@ use serde_json::Value;
 use sha2::Digest as _;
 
 use crate::{
-    CONTENT_FILTER_ISSUE, FILTER_CONTEXT_ISSUE, Record, TRANSLATION_ISSUE, TranslationConfig,
+    Issue, Record, TranslationConfig,
     error::{Error, chain, fail},
     host::{Event, Host, HostError, PageSource, PageTask, Projects, WriteMode},
+    record::PageContext,
     remote::{Client, Remote, Service},
     sha256_hex,
     store::{exists, load, page_image, parse, read_json, read_optional_json, save},
@@ -65,15 +66,15 @@ async fn mark_filter_context(
 ) -> Result<usize, Error> {
     let mut marked = 0;
     for &position in positions {
-        let name = &index[position];
-        let mut record: Record = read_json(host, name).await?;
-        if record.preserve_original || record.has_content_filter() {
-            continue;
-        }
-        record.issues.push(FILTER_CONTEXT_ISSUE.into());
-        save(host, name, &record, WriteMode::Replace).await?;
-        host.report(Event::PageSaved { page: name.clone() });
-        marked += 1;
+        let saved = update_record(host, &index[position], |record| {
+            if record.preserve_original || record.has_content_filter() {
+                return false;
+            }
+            record.issues.push(Issue::ContentFilterContext);
+            true
+        })
+        .await?;
+        marked += usize::from(saved);
     }
     Ok(marked)
 }
@@ -196,12 +197,7 @@ pub async fn translate<H: Host, P: Projects>(
 ) -> Result<(), Error> {
     let index: Vec<String> = read_json(host, "index.json").await?;
     let prompt = service.prompt.as_deref();
-    if prompt.is_some_and(|template| {
-        !template.split("{{").skip(1).any(|part| {
-            part.split_once("}}")
-                .is_some_and(|(name, _)| name.trim() == "terminology")
-        })
-    }) {
+    if prompt.is_some_and(|template| !template_uses(template, "terminology")) {
         host.report(Event::Warning {
             page: None,
             message: "custom translation prompt omits {{terminology}}; this translation will not send the glossary or collect candidate terms. Add {{terminology}} to the prompt to enable them.".into(),
@@ -212,7 +208,6 @@ pub async fn translate<H: Host, P: Projects>(
         model: service.model.clone(),
         language: service.target_language.clone(),
         visual: !service.text_only,
-        defer_proper_names: false,
         prompt_hash: prompt.map(|data| {
             sha256_hex(&serde_json::to_vec(&(data, &service.variables)).expect("serialize prompt"))
         }),
@@ -432,13 +427,6 @@ fn remember_page_safe(
     }
 }
 
-fn normalize(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
 /// Source texts of `record` regions listed in a request's translation memory,
 /// including reviewed corrections.
 fn memory_sources(record: &Record, request: &Value) -> impl Iterator<Item = String> {
@@ -466,7 +454,7 @@ fn memory_sources(record: &Record, request: &Value) -> impl Iterator<Item = Stri
                 .and_then(|geometry| geometry.corrected_source.as_deref());
             std::iter::once(region.block.text.as_str()).chain(corrected)
         })
-        .map(normalize)
+        .map(match_text)
         .collect::<Vec<_>>()
         .into_iter()
 }
@@ -493,11 +481,11 @@ async fn context_pages(
         let prior: Record = read_json(host, name).await?;
         if prior.page.regions.iter().any(|region| {
             previous.contains(region.block.text.as_str())
-                || requested.contains(&normalize(&region.block.text))
+                || requested.contains(&match_text(&region.block.text))
         }) || prior.analysis.as_ref().is_some_and(|analysis| {
             analysis.regions.iter().any(|region| {
                 region.corrected_source.as_deref().is_some_and(|source| {
-                    previous.contains(source) || requested.contains(&normalize(source))
+                    previous.contains(source) || requested.contains(&match_text(source))
                 })
             })
         }) {
@@ -545,15 +533,9 @@ async fn translate_range<H: Host, S: PageSource>(
     let scene_end = range.end;
     let mut clean_start = scene_start;
     let mut stale_summary = inherited_summary_invalidated || parallel;
-    if !stale_summary {
-        for name in &index[..scene_start] {
-            let prior: Record = read_json(host, name).await?;
-            if prior.summary_invalidated {
-                stale_summary = true;
-                break;
-            }
-        }
-    }
+    // Pages of this project whose edits made the carried summary stale; their
+    // flags are cleared once a later page receives a fresh summary.
+    let mut stale_pages = Vec::new();
     if stale_summary {
         context.scene_summary = None;
     }
@@ -564,10 +546,14 @@ async fn translate_range<H: Host, S: PageSource>(
         let name = &index[i];
         let (revision, bytes) = load(host, name).await?;
         let mut record: Record = parse(host, name, &bytes)?;
-        stale_summary |= record.summary_invalidated;
+        if record.summary_invalidated {
+            stale_summary = true;
+            stale_pages.push(i);
+        }
         if stale_summary {
             context.scene_summary = None;
         }
+        let mut fresh_summary = false;
         if record.has_content_filter() {
             if record.has_missing_translation() {
                 filtered_pages += 1;
@@ -589,19 +575,16 @@ async fn translate_range<H: Host, S: PageSource>(
             .collect();
         if let Some(prior) = &record.context {
             if record.translated_source.as_ref() != Some(&source) {
-                return fail(format!(
-                    "{name} source dialogue differs from its translation checkpoint"
-                ));
+                return Err(Error::CheckpointSourceMismatch { page: name.clone() });
             }
             if record
                 .service
                 .as_ref()
                 .is_none_or(|old| !config.compatible_checkpoint(old))
             {
-                return fail(format!(
-                    "{} was translated with another model, endpoint, language or visual mode; use --text-only for text checkpoints",
-                    host.locate(name)
-                ));
+                return Err(Error::IncompatibleCheckpoint {
+                    page: host.locate(name),
+                });
             }
             if isolate {
                 // Previously generated context may include a filtered page.
@@ -704,9 +687,7 @@ async fn translate_range<H: Host, S: PageSource>(
                 let image = page_image(&mut **pages.borrow_mut(), &record.source)
                     .map_err(|error| error.context(format!("read page image {}", record.source)))?;
                 if image.dimensions() != (record.page.width, record.page.height) {
-                    return fail(format!(
-                        "{name} source image dimensions differ from the analyzed page"
-                    ));
+                    return Err(Error::DimensionsChanged { page: name.clone() });
                 }
                 if record.analysis.is_none() && !preserved.is_empty() {
                     let mut complete_page = record.page.clone();
@@ -766,7 +747,7 @@ async fn translate_range<H: Host, S: PageSource>(
                 exchange: RefCell::new(None),
             };
             let result = loop {
-                let result = translate_missing_page_with_crops(
+                let result = translate_missing_page(
                     &observed,
                     &mut record.page,
                     upcoming,
@@ -804,7 +785,18 @@ async fn translate_range<H: Host, S: PageSource>(
                 break result;
             };
             let exchange = observed.exchange.into_inner();
-            if let Some((summary, source)) = saved_summary
+            // A summary written while the carried one was withheld as stale
+            // derives only from current dialogue, so it ends the staleness.
+            fresh_summary = stale_summary
+                && !isolate
+                && !parallel
+                && result.is_ok()
+                && record
+                    .analysis
+                    .as_ref()
+                    .is_some_and(|analysis| analysis.scene_summary.is_some());
+            if !fresh_summary
+                && let Some((summary, source)) = saved_summary
                 && let Some(analysis) = &mut record.analysis
             {
                 analysis.scene_summary = summary;
@@ -814,21 +806,25 @@ async fn translate_range<H: Host, S: PageSource>(
                 Some(scene) => Some(scene.write_lock.lock().await),
                 None => None,
             };
-            if halted() && !matches!(result, Err(TranslationError::ContentFilter(_))) {
-                result?;
-                break;
-            }
+            // A validated page is still saved and cached when the run stops.
+            let result = match result {
+                Err(error) if halted() && !matches!(error, TranslationError::ContentFilter(_)) => {
+                    return Err(error.into());
+                }
+                result => result,
+            };
             match result {
                 Ok(conflicts) => {
                     consecutive_service_failures = 0;
                     for conflict in conflicts {
-                        let issue = format!(
-                            "translation terminology conflict with confirmed term: {:?}: confirmed {:?}, model suggested {:?}",
-                            conflict.source, conflict.confirmed_target, conflict.proposed_target
-                        );
+                        let issue = Issue::ConfirmedTermConflict {
+                            source: conflict.source,
+                            confirmed: conflict.confirmed_target,
+                            proposed: conflict.proposed_target,
+                        };
                         host.report(Event::Warning {
                             page: Some(name.clone()),
-                            message: issue.clone(),
+                            message: issue.to_string(),
                         });
                         if !record.issues.contains(&issue) {
                             record.issues.push(issue);
@@ -876,7 +872,7 @@ async fn translate_range<H: Host, S: PageSource>(
                     }
                     record
                         .issues
-                        .retain(|issue| !issue.starts_with(TRANSLATION_ISSUE));
+                        .retain(|issue| !issue.is_translation_failure());
                 }
                 Err(error @ TranslationError::ContentFilter(_)) => {
                     let mut affected = BTreeSet::new();
@@ -922,18 +918,20 @@ async fn translate_range<H: Host, S: PageSource>(
                         );
                     }
                     affected.remove(&i);
-                    let issue = format!("{CONTENT_FILTER_ISSUE}: {error}");
+                    let issue = Issue::ContentFilter {
+                        error: error.to_string(),
+                    };
                     host.report(Event::Warning {
                         page: Some(name.clone()),
-                        message: issue.clone(),
+                        message: issue.to_string(),
                     });
                     record
                         .issues
-                        .retain(|issue| !issue.starts_with(TRANSLATION_ISSUE));
+                        .retain(|issue| !issue.is_translation_failure());
                     record.issues.push(issue);
                     restore_preserved(&mut record.page, preserved);
                     restore_preserved_geometry(&mut record.analysis, preserved_geometry);
-                    save_unless_changed(host, name, &record, &revision).await?;
+                    save_unless_changed(host, name, &record, &revision, FILL_LATER).await?;
                     let affected_count = mark_filter_context(host, index, &affected).await?;
                     host.report(Event::Warning {
                         page: Some(name.clone()),
@@ -959,14 +957,16 @@ async fn translate_range<H: Host, S: PageSource>(
                     } else {
                         consecutive_service_failures = 0;
                     }
-                    let issue = format!("{TRANSLATION_ISSUE}{error}");
+                    let issue = Issue::TranslationFailed {
+                        error: error.to_string(),
+                    };
                     host.report(Event::Warning {
                         page: Some(name.clone()),
-                        message: issue.clone(),
+                        message: issue.to_string(),
                     });
                     record
                         .issues
-                        .retain(|issue| !issue.starts_with(TRANSLATION_ISSUE));
+                        .retain(|issue| !issue.is_translation_failure());
                     record.issues.push(issue);
                     remember_page_safe(
                         &record.page,
@@ -980,7 +980,7 @@ async fn translate_range<H: Host, S: PageSource>(
                     );
                     restore_preserved(&mut record.page, preserved);
                     restore_preserved_geometry(&mut record.analysis, preserved_geometry);
-                    save_unless_changed(host, name, &record, &revision).await?;
+                    save_unless_changed(host, name, &record, &revision, FILL_LATER).await?;
                     failed_pages += 1;
                     if consecutive_service_failures >= 3 {
                         return fail(
@@ -996,26 +996,42 @@ async fn translate_range<H: Host, S: PageSource>(
                 record.translation_models.insert(id, model.clone());
             }
         }
-        record.context = Some(context.clone());
+        record.context = Some(PageContext::from(&context));
         record.translated_source = Some(source);
         record.service = Some(config.clone());
         restore_preserved(&mut record.page, preserved);
         restore_preserved_geometry(&mut record.analysis, preserved_geometry);
-        if !save_unless_changed(host, name, &record, &revision).await? {
+        if fresh_summary {
+            record.summary_invalidated = false;
+        }
+        if !save_unless_changed(host, name, &record, &revision, FILL_LATER).await? {
             failed_pages += 1;
+        } else if fresh_summary {
+            stale_summary = false;
+            for position in std::mem::take(&mut stale_pages) {
+                if position != i {
+                    update_record(host, &index[position], |record| {
+                        std::mem::take(&mut record.summary_invalidated)
+                    })
+                    .await?;
+                }
+            }
         }
     }
     Ok((context, failed_pages, filtered_pages))
 }
 
-/// Saves a translated page unless another writer, such as the web workbench,
-/// replaced the record after it was read. Human edits win; the page keeps
-/// its missing translations and is retried by the next run.
+const FILL_LATER: &str = "rerun translate to fill it";
+
+/// Saves a page unless another writer, such as the web workbench, replaced
+/// the record after it was read. Human edits win: the conflict is reported
+/// with `skipped`, what happens to this run's change, and `false` is returned.
 async fn save_unless_changed(
     host: &impl Host,
     name: &str,
     record: &Record,
     revision: &str,
+    skipped: &str,
 ) -> Result<bool, Error> {
     match save(
         host,
@@ -1033,7 +1049,7 @@ async fn save_unless_changed(
             host.report(Event::Warning {
                 page: None,
                 message: format!(
-                    "{} changed during translation; kept the other change, rerun translate to fill it",
+                    "{} changed during translation; kept the other change, {skipped}",
                     host.locate(name)
                 ),
             });
@@ -1041,6 +1057,22 @@ async fn save_unless_changed(
         }
         Err(error) => Err(error),
     }
+}
+
+/// Reads a page record, applies `change` and saves it unless another writer
+/// replaced it meanwhile. `change` returns whether it changed anything.
+/// Returns whether the record was saved.
+async fn update_record(
+    host: &impl Host,
+    name: &str,
+    change: impl FnOnce(&mut Record) -> bool,
+) -> Result<bool, Error> {
+    let (revision, bytes) = load(host, name).await?;
+    let mut record: Record = parse(host, name, &bytes)?;
+    if !change(&mut record) {
+        return Ok(false);
+    }
+    save_unless_changed(host, name, &record, &revision, "skipped updating it").await
 }
 
 fn restore_preserved(page: &mut Page, preserved: Vec<(usize, camel::Region)>) {
@@ -1139,4 +1171,115 @@ fn small_region_crops(
         });
     }
     Ok(crops)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the in-memory host answers without waiting"
+)]
+mod tests {
+    use std::time::Duration;
+
+    use futures::executor::block_on;
+
+    use super::*;
+    use crate::host::{HttpRequest, HttpResponse};
+
+    /// Project files in memory; each write bumps the file's revision.
+    #[derive(Default)]
+    struct Memory {
+        files: RefCell<BTreeMap<String, (u64, Vec<u8>)>>,
+        events: RefCell<Vec<Event>>,
+    }
+
+    impl Memory {
+        fn put(&self, path: &str, bytes: &[u8]) {
+            let mut files = self.files.borrow_mut();
+            let revision = files.get(path).map_or(0, |(revision, _)| revision + 1);
+            files.insert(path.into(), (revision, bytes.to_vec()));
+        }
+    }
+
+    impl Host for Memory {
+        async fn read(&self, path: &str) -> Result<Option<Vec<u8>>, HostError> {
+            Ok(self
+                .files
+                .borrow()
+                .get(path)
+                .map(|(_, bytes)| bytes.clone()))
+        }
+        async fn revision(&self, path: &str) -> Result<Option<String>, HostError> {
+            Ok(self
+                .files
+                .borrow()
+                .get(path)
+                .map(|(revision, _)| revision.to_string()))
+        }
+        async fn write(&self, path: &str, bytes: &[u8], mode: WriteMode) -> Result<(), HostError> {
+            let current = self.revision(path).await?;
+            let allowed = match mode {
+                WriteMode::CreateNew => current.is_none(),
+                WriteMode::Replace => true,
+                WriteMode::ReplaceIfRevision(expected) => current == Some(expected),
+            };
+            if !allowed {
+                return Err(HostError::Conflict(path.into()));
+            }
+            self.put(path, bytes);
+            Ok(())
+        }
+        async fn append(&self, _: &str, _: &[u8]) -> Result<(), HostError> {
+            Ok(())
+        }
+        async fn remove(&self, path: &str) -> Result<(), HostError> {
+            self.files.borrow_mut().remove(path);
+            Ok(())
+        }
+        async fn http(&self, _: HttpRequest) -> Result<HttpResponse, HostError> {
+            unreachable!("no requests")
+        }
+        async fn sleep(&self, _: Duration) {}
+        fn now_ms(&self) -> u64 {
+            0
+        }
+        fn report(&self, event: Event) {
+            self.events.borrow_mut().push(event);
+        }
+        fn cancelled(&self) -> bool {
+            false
+        }
+        fn locate(&self, path: &str) -> String {
+            path.into()
+        }
+    }
+
+    #[test]
+    fn record_updates_skip_a_record_changed_by_another_writer() {
+        let host = Memory::default();
+        let record = br#"{"source":"@0:x","page":{"width":1,"height":1,"regions":[]}}"#;
+        host.put("00001.json", record);
+        let saved = block_on(update_record(&host, "00001.json", |record| {
+            // Another writer, such as the workbench, saves the page meanwhile.
+            host.put("00001.json", b"edited");
+            record.issues.push(Issue::ContentFilterContext);
+            true
+        }))
+        .unwrap();
+        assert!(!saved);
+        assert_eq!(host.files.borrow()["00001.json"].1, b"edited");
+        assert!(matches!(
+            host.events.borrow().as_slice(),
+            [Event::Warning { .. }]
+        ));
+
+        host.put("00002.json", record);
+        assert!(
+            block_on(update_record(&host, "00002.json", |record| {
+                record.issues.push(Issue::ContentFilterContext);
+                true
+            }))
+            .unwrap()
+        );
+    }
 }

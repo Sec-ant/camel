@@ -742,13 +742,6 @@ fn manual_complete_pages_are_untouched_and_partial_pages_only_request_missing_di
     assert_eq!(second["page"]["regions"][1]["translation"], "补齐");
     assert_eq!(second["page"]["regions"][2]["translation"], "另一句");
     assert_eq!(second["page"]["regions"][3]["translation"], "人工后句。");
-    let recent = &read_record(&third_path)["context"]["recent"];
-    assert_eq!(recent.as_array().unwrap().len(), 5);
-    assert_eq!(recent[0]["target"], "人工第一页。");
-    assert_eq!(recent[1]["target"], "人工前句。");
-    assert_eq!(recent[2]["target"], "补齐");
-    assert_eq!(recent[3]["target"], "另一句");
-    assert_eq!(recent[4]["target"], "人工后句。");
     let second_bytes = fs::read(&second_path).unwrap();
     success(translate(dir.path(), &url).output().unwrap());
     assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
@@ -772,7 +765,7 @@ fn clearing_a_checkpoint_via_review_refills_only_that_item_and_keeps_semantic_re
             (14, "After", Some("人工后句。")),
         ],
     );
-    first["context"] = json!({"glossary":{"OMNI-MAN":"旧译名"},"recent":[{"source":"stale","target":"must not replay"}],"scene_summary":"Old scene"});
+    first["context"] = json!({"glossary":{"OMNI-MAN":"旧译名"},"scene_summary":"Old scene"});
     first["translated_source"] = json!([[9, "First"], [2, "Missing"], [14, "After"]]);
     first["service"] =
         json!({"base_url":url,"model":"test-model","language":"zh-CN","visual":true});
@@ -933,7 +926,7 @@ fn inspection_summarizes_translation_progress() {
     let first = dir.path().join("00001.json");
     let mut record = read_record(&first);
     record["page"]["regions"][0]["translation"] = json!("一");
-    record["issues"] = json!(["translation context affected by content_filter"]);
+    record["issues"] = json!([{"kind": "content_filter_context"}]);
     write_record(&first, &record);
 
     let second = dir.path().join("00002.json");
@@ -1190,7 +1183,7 @@ fn invalid_reply_can_be_marked_and_later_pages_translate_then_resume() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|i| i.as_str().unwrap().starts_with("translation unresolved: "))
+            .any(|i| i["kind"] == "translation_failed")
     );
     let completed = read_record(&dir.path().join("00002.json"));
     assert_eq!(completed["page"]["regions"][0]["translation"], "你在哪儿？");
@@ -1214,7 +1207,7 @@ fn invalid_reply_can_be_marked_and_later_pages_translate_then_resume() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|i| i.as_str().unwrap().starts_with("translation unresolved: "))
+            .any(|i| i["kind"] == "translation_failed")
     );
     assert_eq!(read_record(&dir.path().join("00002.json")), completed);
 }
@@ -1292,13 +1285,12 @@ fn exhausted_transient_error_is_marked_and_later_page_is_translated() {
             .contains("1 pages have invalid model replies or temporary service errors")
     );
     let failed = read_record(&dir.path().join("00001.json"));
-    assert!(
-        failed["issues"]
-            .as_array()
+    assert!(failed["issues"].as_array().unwrap().iter().any(|issue| {
+        issue["error"]
+            .as_str()
             .unwrap()
-            .iter()
-            .any(|issue| issue.as_str().unwrap().contains("temporarily unavailable"))
-    );
+            .contains("temporarily unavailable")
+    }));
     let completed = read_record(&dir.path().join("00002.json"));
     assert_eq!(completed["page"]["regions"][0]["translation"], "下一页");
     success(
@@ -1332,12 +1324,13 @@ fn repeated_service_failures_stop_after_marking_three_pages() {
     assert_eq!(handle.join().unwrap().len(), 9);
     for page in 1..=3 {
         let record = read_record(&dir.path().join(format!("{page:05}.json")));
-        assert!(record["issues"].as_array().unwrap().iter().any(|issue| {
-            issue
-                .as_str()
+        assert!(
+            record["issues"]
+                .as_array()
                 .unwrap()
-                .starts_with("translation unresolved: ")
-        }));
+                .iter()
+                .any(|issue| { issue["kind"] == "translation_failed" })
+        );
     }
     let fourth = read_record(&dir.path().join("00004.json"));
     assert!(fourth["page"]["regions"][0]["translation"].is_null());
@@ -1353,7 +1346,7 @@ fn confirmed_glossary_survives_checkpoint_replay_and_is_saved_for_resume() {
     let first_path = dir.path().join("00001.json");
     let mut first: Value = serde_json::from_slice(&fs::read(&first_path).unwrap()).unwrap();
     first["page"]["regions"][0]["translation"] = json!("奥姆尼曼！");
-    first["context"] = json!({"glossary":{"OMNI-MAN":"奥姆尼曼"},"recent":[]});
+    first["context"] = json!({"glossary":{"OMNI-MAN":"奥姆尼曼"}});
     first["translated_source"] = json!([[7, "OMNI-MAN!"]]);
     first["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
     let completed = serde_json::to_vec(&first).unwrap();
@@ -1406,7 +1399,8 @@ fn custom_prompt_resumes_existing_pages_without_sending_the_glossary() {
     let first_path = dir.path().join("00001.json");
     let mut first = read_record(&first_path);
     first["page"]["regions"][0]["translation"] = json!("全能侠！");
-    first["context"] = json!({"glossary":{"Omni-Man":"全能侠"},"proposed_terms":{"Mauler Twins":"莫勒双子"},"recent":[]});
+    first["context"] =
+        json!({"glossary":{"Omni-Man":"全能侠"},"proposed_terms":{"Mauler Twins":"莫勒双子"}});
     first["translated_source"] = json!([[7, "OMNI-MAN!"]]);
     first["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
     write_record(&first_path, &first);
@@ -1499,7 +1493,6 @@ fn preceding_project_carries_story_and_terminology_through_resume() {
     prior["context"] = json!({
         "glossary":{"Mark":"马克"},
         "proposed_terms":{"Eve":"伊芙"},
-        "recent":[{"source":"Mark meets Eve","target":"旧译文"}],
         "scene_summary":"Mark and Eve met."
     });
     prior["service"] =
@@ -1683,7 +1676,7 @@ fn interrupted_project_replays_context_from_completed_pages() {
     let path = dir.path().join("00001.json");
     let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     record["page"]["regions"][0]["translation"] = json!("你好，马克！");
-    record["context"] = json!({"glossary":{"Mark":"马克"},"recent":[{"source":"Hello, Mark!","target":"你好，马克！"}]});
+    record["context"] = json!({"glossary":{"Mark":"马克"}});
     record["translated_source"] = json!([[7, "Hello, Mark!"]]);
     record["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
     fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
@@ -1718,7 +1711,7 @@ fn large_book_term_memory_survives_resume_without_full_prompt_copy() {
     let path = dir.path().join("00001.json");
     let mut first = read_record(&path);
     first["page"]["regions"][0]["translation"] = json!("前文");
-    first["context"] = json!({"glossary":glossary,"proposed_terms":proposed,"recent":[]});
+    first["context"] = json!({"glossary":glossary,"proposed_terms":proposed});
     first["translated_source"] = json!([[7, "Earlier dialogue"]]);
     first["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
     write_record(&path, &first);
@@ -2480,7 +2473,7 @@ fn partial_render_keeps_missing_and_overlapping_dialogue_but_renders_other_pages
             (9, "Separate", Some("你好")),
         ],
     );
-    first["issues"] = json!(["unresolved text at 5,5: missing"]);
+    first["issues"] = json!([{"kind": "unresolved_text", "x": 5, "y": 5, "reason": "missing"}]);
     for region in &mut first["page"]["regions"].as_array_mut().unwrap()[..2] {
         region["bubble"]["bounds"]["width"] = json!(80);
         for span in region["bubble"]["interior"].as_array_mut().unwrap() {
@@ -2825,7 +2818,7 @@ fn changed_dialogue_invalidates_checkpoint_before_network_access() {
     let dir = project(&[(7, "Hello, Mark!")]);
     let path = dir.path().join("00001.json");
     let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    record["context"] = json!({"glossary":{},"recent":[]});
+    record["context"] = json!({"glossary":{}});
     record["translated_source"] = json!([[7, "Something else"]]);
     fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
     let before = fs::read(&path).unwrap();
@@ -2896,17 +2889,19 @@ fn content_filter_preserves_page_continues_cleanly_and_is_not_retried() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|issue| issue == "translation context affected by content_filter")
+            .any(|issue| issue["kind"] == "content_filter_context")
     );
     let failed = read_record(&path);
     assert_eq!(failed["page"]["regions"][0]["translation"], "人工译文");
     assert!(failed["page"]["regions"][1]["translation"].is_null());
     assert_eq!(failed["preserved_regions"], json!([5]));
-    assert!(failed["issues"].as_array().unwrap().iter().any(|v| {
-        v.as_str()
+    assert!(
+        failed["issues"]
+            .as_array()
             .unwrap()
-            .starts_with("translation unresolved: content_filter")
-    }));
+            .iter()
+            .any(|v| { v["kind"] == "content_filter" })
+    );
     let again = translate(dir.path(), &url)
         .arg("--continue-on-error")
         .env("CAMEL_API_KEY", "integration-key")
@@ -2933,7 +2928,7 @@ fn historical_content_filter_rebuilds_context_after_last_rejected_page() {
         let mut page = read_record(&path);
         page["page"]["regions"][0]["translation"] = json!("旧译文");
         page["issues"] = json!([
-            "translation context affected by content_filter: primary model returned content_filter; translation was produced by fallback"
+            {"kind": "content_filter_context"}
         ]);
         write_record(&path, &page);
     }
@@ -2986,7 +2981,7 @@ fn historical_content_filter_parallel_scenes_never_use_old_summaries() {
     plan_server.join().unwrap();
     let path = dir.path().join("00001.json");
     let mut page = read_record(&path);
-    page["issues"] = json!(["translation context affected by content_filter"]);
+    page["issues"] = json!([{"kind": "content_filter_context"}]);
     write_record(&path, &page);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -3333,7 +3328,7 @@ fn parallel_resume_does_not_reuse_candidates_from_old_checkpoints() {
     let path = dir.path().join("00001.json");
     let mut page = read_record(&path);
     page["page"]["regions"][0]["translation"] = json!("之前的译文");
-    page["context"] = json!({"glossary":{},"proposed_terms":{"Mystery":"旧候选"},"recent":[]});
+    page["context"] = json!({"glossary":{},"proposed_terms":{"Mystery":"旧候选"}});
     page["translated_source"] = json!([[1, "EARLIER PAGE"]]);
     page["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
     write_record(&path, &page);
@@ -3663,7 +3658,7 @@ fn marked_page_splits_safe_translation_on_both_sides() {
     plan_handle.join().unwrap();
     let path = dir.path().join("00002.json");
     let mut record = read_record(&path);
-    record["issues"] = json!(["translation context affected by content_filter"]);
+    record["issues"] = json!([{"kind": "content_filter_context"}]);
     write_record(&path, &record);
     let (url, handle) = server(vec![answer(1, "前面的译文"), answer(3, "后面的译文")]);
     let output = translate(dir.path(), &url)
@@ -3775,7 +3770,7 @@ fn content_filter_pages_export_existing_translations_and_report_missing_regions(
         let path = dir.path().join(name);
         let mut record = read_record(&path);
         record["page"]["regions"][0]["translation"] = json!("OK");
-        record["issues"] = json!(["translation context affected by content_filter"]);
+        record["issues"] = json!([{"kind": "content_filter_context"}]);
         if name == "00002.json" {
             let first = &mut record["page"]["regions"][0];
             first["bubble"]["bounds"] = json!({"x":10,"y":10,"width":80,"height":100});
@@ -3899,7 +3894,7 @@ fn content_filter_clean_export_reports_history_and_erases_normally() {
     let mut record = read_record(&path);
     record["page"]["regions"][0]["translation"] = json!("OK");
     record["issues"] = json!([
-        "translation context affected by content_filter: primary model returned content_filter; translation was produced by fallback"
+        {"kind": "content_filter_context"}
     ]);
     write_record(&path, &record);
     let output = dir.path().join("clean");
@@ -3955,8 +3950,7 @@ fn resumed_translation_does_not_reuse_a_summary_before_region_repair() {
             let path = dir.path().join(format!("{i:05}.json"));
             let mut record = read_record(&path);
             record["page"]["regions"][0]["translation"] = json!("已完成");
-            record["context"] =
-                json!({"glossary":{},"recent":[],"scene_summary":"obsolete summary"});
+            record["context"] = json!({"glossary":{},"scene_summary":"obsolete summary"});
             record["translated_source"] = json!([[i, source]]);
             record["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
             if invalidated && i == 2 {
@@ -3983,13 +3977,46 @@ fn resumed_translation_does_not_reuse_a_summary_before_region_repair() {
 }
 
 #[test]
+fn a_fresh_summary_after_an_edited_page_clears_its_invalidation() {
+    let dir = project(&[(1, "First"), (2, "Second"), (3, "Third"), (4, "Fourth")]);
+    let (url, handle) = server(vec![
+        json!({"translations":[{"id":3,"text":"第三"}],"scene_summary":"fresh summary"}),
+        json!({"translations":[{"id":4,"text":"第四"}]}),
+    ]);
+    for (i, source) in [(1, "First"), (2, "Second")] {
+        let path = dir.path().join(format!("{i:05}.json"));
+        let mut record = read_record(&path);
+        record["page"]["regions"][0]["translation"] = json!("已完成");
+        record["context"] = json!({"glossary":{},"scene_summary":"obsolete summary"});
+        record["translated_source"] = json!([[i, source]]);
+        record["service"] =
+            json!({"base_url":url,"model":"test-model","language":"zh-CN","visual":true});
+        record["summary_invalidated"] = json!(i == 2);
+        write_record(&path, &record);
+    }
+    success(
+        translate_visual(dir.path(), &url)
+            .env("CAMEL_API_KEY", "integration-key")
+            .output()
+            .unwrap(),
+    );
+    let requests = handle.join().unwrap();
+    assert!(request_input(&requests[0]).get("scene_summary").is_none());
+    assert_eq!(
+        request_input(&requests[1])["scene_summary"],
+        "fresh summary"
+    );
+    assert!(read_record(&dir.path().join("00002.json"))["summary_invalidated"].is_null());
+}
+
+#[test]
 fn carried_context_discards_a_summary_invalidated_in_previous_project() {
     for invalidated in [false, true] {
         let previous = project(&[(3, "Previous")]);
         let path = previous.path().join("00001.json");
         let mut record = read_record(&path);
         record["page"]["regions"][0]["translation"] = json!("之前");
-        record["context"] = json!({"glossary":{},"recent":[],"scene_summary":"previous summary"});
+        record["context"] = json!({"glossary":{},"scene_summary":"previous summary"});
         record["service"] =
             json!({"base_url":"https://example.com/v1","model":"old","language":"zh-CN"});
         if invalidated {
@@ -4024,7 +4051,7 @@ fn frozen_context_discards_summary_when_previous_project_is_repaired() {
     let path = previous.path().join("00001.json");
     let mut record = read_record(&path);
     record["page"]["regions"][0]["translation"] = json!("之前");
-    record["context"] = json!({"glossary":{},"recent":[],"scene_summary":"old summary"});
+    record["context"] = json!({"glossary":{},"scene_summary":"old summary"});
     record["service"] =
         json!({"base_url":"https://example.com/v1","model":"old","language":"zh-CN"});
     write_record(&path, &record);
@@ -4093,10 +4120,7 @@ fn conflicting_model_term_keeps_dialogue_and_reports_confirmed_choice() {
     assert!(record["context"].get("proposed_terms").is_none());
     let issues = record["issues"].as_array().unwrap();
     assert!(issues.iter().any(|issue| {
-        let text = issue.as_str().unwrap();
-        ["terminology conflict", "Angstrom", "安格斯特朗", "安斯特朗"]
-            .iter()
-            .all(|part| text.contains(part))
+        issue == &json!({"kind":"confirmed_term_conflict", "source":"Angstrom", "confirmed":"安格斯特朗", "proposed":"安斯特朗"})
     }));
 }
 
@@ -4146,9 +4170,7 @@ fn remove_reviewed_false_region_preserves_other_dialogue_and_allows_parallel_res
     ]);
     record["translated_source"] = json!([[7, "REAL LINE"], [9, "NOISE"], [11, "OTHER"]]);
     record["translation_models"] = json!({"9":"test-model","11":"test-model"});
-    record["context"] = json!({"glossary":{},"recent":[
-        {"source":"Reviewed NOISE","target":"乱码"},
-        {"source":"Reviewed OTHER","target":"其他"}],"scene_summary":"old summary"});
+    record["context"] = json!({"glossary":{},"scene_summary":"old summary"});
     write_record(&path, &record);
     let (plan_url, plan_server) = server(vec![json!({"continues_previous":false,"scenes":[
         {"pages":["00001.json"],"summary":"First scene"}
@@ -4222,10 +4244,6 @@ fn remove_reviewed_false_region_preserves_other_dialogue_and_allows_parallel_res
         json!([[7, "REAL LINE"], [11, "OTHER"]])
     );
     assert_eq!(after["translation_models"], json!({"11":"test-model"}));
-    assert_eq!(
-        after["context"]["recent"],
-        json!([{"source":"Reviewed OTHER","target":"其他"}])
-    );
     assert!(after["context"]["scene_summary"].is_null());
     assert_eq!(after["summary_invalidated"], true);
     assert_ne!(fs::read(&plan).unwrap(), plan_before);
@@ -4370,11 +4388,11 @@ fn parallel_resume_replays_clean_dialogue_across_filter_boundaries_without_old_c
             let mut record = read_record(&path);
             record["page"]["regions"][0]["translation"] = json!(target);
             if page == 2 {
-                record["issues"] = json!(["translation unresolved: content_filter: fixture"]);
+                record["issues"] = json!([{"kind": "content_filter", "error": "fixture"}]);
             }
             if page == 3 {
                 record["context"] = json!({"glossary":{},"proposed_terms":{"OldName":"旧候选"},
-                    "recent":[{"source":"FILTERED SECRET","target":"污染上下文"}],"scene_summary":"污染摘要"});
+                    "scene_summary":"污染摘要"});
                 record["translated_source"] = json!([[3, "SAFE AFTER"]]);
                 record["service"] = json!({"base_url":url,"model":"test-model","language":"zh-CN"});
             }

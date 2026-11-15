@@ -8,8 +8,11 @@ use camel::{
     geometry, panels,
 };
 use image::RgbImage;
+use rten::Model;
 
-use crate::{DetectionKind, Detector, Error, RecognizedWord, Recognizer, ThreadPool, segment::Ink};
+use crate::{
+    DetectionKind, Detector, Error, RecognizedWord, Recognizer, model_error, pool, segment::Ink,
+};
 
 fn erase_masks_overlap(a: &[camel::Span], b: &[camel::Span]) -> bool {
     let (mut i, mut j) = (0, 0);
@@ -91,10 +94,11 @@ impl Engine {
     ///
     /// Returns [`Error::Model`] or [`Error::Output`] when either model is missing or invalid.
     pub fn load(directory: &Path, threads: usize) -> Result<Self, Error> {
-        let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
+        let load = |name: &str| Model::load_file(directory.join(name)).map_err(model_error);
+        let pool = pool(threads);
         Ok(Self {
-            detector: Detector::load(&directory.join("detector.onnx"), Arc::clone(&pool))?,
-            recognizer: Recognizer::load(&directory.join("recognizer.onnx"), pool)?,
+            detector: Detector::new(load("detector.onnx")?, Arc::clone(&pool))?,
+            recognizer: Recognizer::new(load("recognizer.onnx")?, pool)?,
         })
     }
 
@@ -109,17 +113,20 @@ impl Engine {
         recognizer: Vec<u8>,
         threads: usize,
     ) -> Result<Self, Error> {
-        let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
+        let pool = pool(threads);
         Ok(Self {
-            detector: Detector::from_bytes(detector, Arc::clone(&pool))?,
-            recognizer: Recognizer::from_bytes(recognizer, pool)?,
+            detector: Detector::new(
+                Model::load(detector).map_err(model_error)?,
+                Arc::clone(&pool),
+            )?,
+            recognizer: Recognizer::new(Model::load(recognizer).map_err(model_error)?, pool)?,
         })
     }
 
     /// Reuse loaded weights with a separate inference thread pool.
     #[must_use]
     pub fn with_threads(&self, threads: usize) -> Self {
-        let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
+        let pool = pool(threads);
         Self {
             detector: Detector {
                 pool: Arc::clone(&pool),

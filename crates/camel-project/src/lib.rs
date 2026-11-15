@@ -5,33 +5,34 @@
 //! optional `translation-plan.json` groups pages into scenes. This crate holds
 //! the record types, every operation on them, and the pipeline steps —
 //! analysis, scene planning, translation, audits, checks and export — so the
-//! command-line tool and the browser workbench run exactly the same code and
-//! write byte-identical files. Pipeline steps reach files, the network and
-//! the clock only through a [`host::Host`].
+//! command-line tool and the browser workbench run exactly the same code.
+//! Page edits and plan repairs write byte-identical files in both; text
+//! recognition may differ slightly between native and WebAssembly builds, so
+//! analysis output is not guaranteed to match. Pipeline steps reach files, the
+//! network and the clock only through a [`host::Host`].
+
+#![warn(missing_docs)]
 
 pub mod analyze;
 pub mod audit;
 pub mod check_layout;
 pub mod edit;
-pub mod error;
+mod error;
 pub mod export;
 pub mod host;
 pub mod plan;
 pub mod prepare;
-pub mod record;
-pub mod remote;
+mod record;
+mod remote;
 pub mod render;
 pub mod source;
 mod store;
 pub mod terms;
 pub mod translate;
 
-pub use error::Error;
-pub use record::{
-    CONTENT_FILTER_ISSUE, FILTER_CONTEXT_ISSUE, Record, TRANSLATION_ISSUE, TranslationConfig,
-    is_content_filter_issue,
-};
-pub use remote::Service;
+pub use error::{Error, chain};
+pub use record::{Issue, PageContext, Record, TermVariants, TranslationConfig};
+pub use remote::{ApiKey, Service};
 
 /// Serializes a project file exactly as Camel writes it: compact JSON and a
 /// trailing newline.

@@ -20,8 +20,7 @@ pub use pipeline::Engine;
 use std::{path::Path, sync::Arc};
 
 use image::RgbImage;
-pub use rten::ThreadPool;
-use rten::{Model, RunOptions, Value};
+use rten::{Model, RunOptions, ThreadPool, Value};
 
 /// Failure to load or run a vision model.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +44,11 @@ fn options(pool: &Arc<ThreadPool>) -> RunOptions {
     let mut options = RunOptions::default();
     options.thread_pool = Some(Arc::clone(pool));
     options
+}
+
+/// An inference thread pool `threads` wide, at least one.
+fn pool(threads: usize) -> Arc<ThreadPool> {
+    Arc::new(ThreadPool::with_num_threads(threads.max(1)))
 }
 
 /// A detected object in original-image coordinates.
@@ -77,14 +81,15 @@ pub struct Detector {
 }
 
 impl Detector {
-    /// Loads a detector model from an ONNX or `.rten` file.
+    /// Loads a detector model from an ONNX or `.rten` file, running inference
+    /// on its own `threads`-wide pool.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Model`] when the file cannot be loaded and [`Error::Output`]
     /// when the model does not have two inputs and three outputs.
-    pub fn load(path: &Path, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        Self::new(Model::load_file(path).map_err(model_error)?, pool)
+    pub fn load(path: &Path, threads: usize) -> Result<Self, Error> {
+        Self::new(Model::load_file(path).map_err(model_error)?, pool(threads))
     }
 
     /// Loads a detector model from ONNX or `.rten` bytes already in memory.
@@ -92,8 +97,8 @@ impl Detector {
     /// # Errors
     ///
     /// Same as [`Detector::load`].
-    pub fn from_bytes(bytes: Vec<u8>, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        Self::new(Model::load(bytes).map_err(model_error)?, pool)
+    pub fn from_bytes(bytes: Vec<u8>, threads: usize) -> Result<Self, Error> {
+        Self::new(Model::load(bytes).map_err(model_error)?, pool(threads))
     }
 
     fn new(model: Model, pool: Arc<ThreadPool>) -> Result<Self, Error> {
@@ -213,14 +218,15 @@ pub struct Recognizer {
 }
 
 impl Recognizer {
-    /// Loads a PP-OCR recognizer whose character dictionary is stored in model metadata.
+    /// Loads a PP-OCR recognizer whose character dictionary is stored in model
+    /// metadata, running inference on its own `threads`-wide pool.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Model`] when the file cannot be loaded and [`Error::Output`]
     /// when the model shape is wrong or the `character` metadata is missing.
-    pub fn load(path: &Path, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        Self::new(Model::load_file(path).map_err(model_error)?, pool)
+    pub fn load(path: &Path, threads: usize) -> Result<Self, Error> {
+        Self::new(Model::load_file(path).map_err(model_error)?, pool(threads))
     }
 
     /// Loads a recognizer from ONNX or `.rten` bytes already in memory.
@@ -228,8 +234,8 @@ impl Recognizer {
     /// # Errors
     ///
     /// Same as [`Recognizer::load`].
-    pub fn from_bytes(bytes: Vec<u8>, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        Self::new(Model::load(bytes).map_err(model_error)?, pool)
+    pub fn from_bytes(bytes: Vec<u8>, threads: usize) -> Result<Self, Error> {
+        Self::new(Model::load(bytes).map_err(model_error)?, pool(threads))
     }
 
     fn new(model: Model, pool: Arc<ThreadPool>) -> Result<Self, Error> {

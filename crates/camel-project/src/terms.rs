@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use camel::translation::Context;
+use camel::translation::{Context, match_text, mentions};
 use serde_json::{Value, json};
 
 use crate::{
@@ -11,21 +11,6 @@ use crate::{
     host::{Event, Host},
     store::{read_json, read_optional_json},
 };
-
-fn normalized(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-fn mentions(text: &str, term: &str) -> bool {
-    let word = |character: char| character.is_ascii_alphanumeric() || character == '_';
-    text.match_indices(term).any(|(start, _)| {
-        (!term.starts_with(word) || !text[..start].ends_with(word))
-            && (!term.ends_with(word) || !text[start + term.len()..].starts_with(word))
-    })
-}
 
 /// Reports candidates for review; matching a term alone does not prove a
 /// translation error. Returns the report JSON.
@@ -59,7 +44,7 @@ pub async fn check_terms(host: &impl Host) -> Result<Value, Error> {
     let terms: Vec<_> = context
         .glossary
         .iter()
-        .map(|(source, target)| (source, target, normalized(source), normalized(target)))
+        .map(|(source, target)| (source, target, match_text(source), match_text(target)))
         .collect();
 
     let mut issues = Vec::new();
@@ -67,13 +52,11 @@ pub async fn check_terms(host: &impl Host) -> Result<Value, Error> {
     for name in index {
         let record: Record = read_json(host, &name).await?;
         for detail in &record.issues {
-            if detail.starts_with("translation terminology conflict with confirmed term:")
-                || detail.starts_with("translation terminology conflict:")
-            {
+            if detail.is_term_conflict() {
                 page_issues.push(json!({
                     "page": name,
                     "kind": "terminology_conflict",
-                    "detail": detail,
+                    "detail": detail.to_string(),
                 }));
             }
         }
@@ -100,9 +83,9 @@ pub async fn check_terms(host: &impl Host) -> Result<Value, Error> {
                     .find(|details| details.region_id == id)
                     .and_then(|details| details.corrected_source.as_deref())
             });
-            let source_normalized = normalized(source);
-            let corrected_normalized = corrected.map(normalized);
-            let translation_normalized = normalized(translation);
+            let source_normalized = match_text(source);
+            let corrected_normalized = corrected.map(match_text);
+            let translation_normalized = match_text(translation);
             for (term, expected, key, target) in &terms {
                 if key == target
                     || !(mentions(&source_normalized, key)

@@ -131,13 +131,14 @@ fn merge(name: &str, mut old: Record, fresh: FreshPage) -> Result<(Record, Vec<U
         analysis.scene_summary_source = prior.scene_summary_source;
     }
     old.issues
-        .retain(|issue| !issue.starts_with("unresolved text at "));
+        .retain(|issue| !matches!(issue, camel_project::Issue::UnresolvedText { .. }));
     old.issues
         .extend(analysis.unresolved_regions.iter().map(|entry| {
-            format!(
-                "unresolved text at {},{}: {}",
-                entry.block.bounds.x, entry.block.bounds.y, entry.reason
-            )
+            camel_project::Issue::UnresolvedText {
+                x: entry.block.bounds.x,
+                y: entry.block.bounds.y,
+                reason: entry.reason.clone(),
+            }
         }));
     old.translated_source = old.context.as_ref().map(|_| {
         page.regions
@@ -204,7 +205,8 @@ pub fn refresh(project: &Path, fresh: &Path, output: &Path, quiet: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use camel::{Bubble, Region, TextBlock, translation::Context};
+    use camel::{Bubble, Region, TextBlock};
+    use camel_project::PageContext;
 
     fn region(id: u32, text: &str, x: u32, translation: Option<&str>) -> Region {
         let bounds = Rect {
@@ -256,7 +258,7 @@ mod tests {
             summary_invalidated: false,
             preserve_original: false,
             preserved_regions: std::collections::BTreeSet::default(),
-            context: Some(Context::default()),
+            context: Some(PageContext::default()),
             service: None,
             translation_models: BTreeMap::from([(1, "model".into())]),
             issues: Vec::new(),

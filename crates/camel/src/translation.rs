@@ -15,7 +15,7 @@ use crate::analysis::{AnalysisMetadata, CoordinateSystem, SemanticSource};
 use crate::{Page, Rect};
 
 /// Longest accepted scene summary, in characters.
-const MAX_SUMMARY_CHARS: usize = 600;
+pub const MAX_SUMMARY_CHARS: usize = 600;
 /// Longest accepted speaker description, in characters.
 const MAX_SPEAKER_CHARS: usize = 120;
 /// Longest accepted translated or corrected region text, in characters.
@@ -60,6 +60,8 @@ fn simplified_chinese(target_language: &str) -> bool {
         || language.starts_with("zh-hans-")
 }
 
+const PAGE_CONTEXT_INSTRUCTIONS: &str = "\n\npage_context contains the entire current page in reading order. Existing translations, corrected source and speakers are read-only reviewed context, including dialogue after requested regions. Translate only regions; never return or revise other IDs.";
+
 fn instructions(base: &str, target_language: &str) -> String {
     let mut instructions =
         format!("{base}\n\n{TERMINOLOGY_INSTRUCTIONS}\n\n{CONTEXT_INSTRUCTIONS}");
@@ -102,10 +104,7 @@ fn translation_instructions(
             use_style: true,
         });
     };
-    let wants_terms = remaining.split("{{").skip(1).any(|part| {
-        part.split_once("}}")
-            .is_some_and(|(name, _)| name.trim() == "terminology")
-    });
+    let wants_terms = template_uses(remaining, "terminology");
     let mut system = String::new();
     let mut terminology = false;
     let mut include_context = false;
@@ -185,12 +184,7 @@ fn translation_instructions(
 fn add_requested_ids(system: &mut String, expected: &BTreeSet<u32>, template: Option<&str>) {
     use std::fmt::Write as _;
 
-    if !template.is_some_and(|template| {
-        template.split("{{").skip(1).any(|part| {
-            part.split_once("}}")
-                .is_some_and(|(name, _)| name.trim() == "response_schema")
-        })
-    }) {
+    if !template.is_some_and(|template| template_uses(template, "response_schema")) {
         return;
     }
     let ids = expected
@@ -572,160 +566,27 @@ struct ValidatedResponse {
     scene_summary: Option<String>,
 }
 
-/// Translates one page atomically with terminology and neighboring dialogue.
+/// Fills only missing or blank translations, preserving existing dialogue and annotations.
 ///
-/// `upcoming` supplies raw dialogue from the next page without another model call.
-/// Returns the model's suggestions that disagree with confirmed terms.
+/// `upcoming` supplies raw dialogue from the next page without another model
+/// call. The full page is supplied as read-only context, then remembered once
+/// in reading order after the response validates. Visual input selects visual
+/// translation and requires analysis metadata. Complete and empty pages do not
+/// call the translator. Returns the model's suggestions that disagree with
+/// confirmed terms.
 ///
 /// # Errors
 ///
 /// Returns the translator's error, or [`TranslationError::Json`] or
-/// [`TranslationError::Invalid`] when the input or response fails validation; on
-/// error the page and context are unchanged.
-pub async fn translate_page(
-    translator: &impl Translator,
-    page: &mut Page,
-    upcoming: Option<&Page>,
-    context: &mut Context,
-    target_language: &str,
-) -> Result<Vec<TermConflict>, TranslationError> {
-    if page.regions.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut request = request(page, upcoming, context, target_language, None)?;
-    let RenderedPrompt {
-        mut system,
-        include_terminology: include_terms,
-        include_context,
-        use_style,
-    } = translation_instructions(
-        false,
-        target_language,
-        translator.prompt_template(),
-        translator.prompt_variables(),
-    )?;
-    if !include_terms {
-        request.glossary.clear();
-        request.proposed_terms.clear();
-    }
-    if !include_context {
-        request.clear_history();
-    }
-    add_memory_instructions(&mut system, !request.translation_memory.is_empty());
-    let expected = request.regions.iter().map(|region| region.id).collect();
-    add_requested_ids(&mut system, &expected, translator.prompt_template());
-    let raw = translator
-        .complete(&system, &serde_json::to_string(&request)?)
-        .await?;
-    let response = validate_response(&raw, &expected, context, false, !include_terms)?;
-    let conflicts = response.conflicts.clone();
-    apply_response(page, context, None, response, target_language, use_style);
-    Ok(conflicts)
-}
-
-/// Corrects OCR, describes the scene, and translates a page in one image request.
-///
-/// # Errors
-///
-/// Fails like [`translate_page`], and with [`TranslationError::Invalid`] when
-/// `jpeg` is empty or `analysis` does not describe `page`.
-pub async fn translate_page_visual(
-    translator: &impl Translator,
-    page: &mut Page,
-    upcoming: Option<&Page>,
-    context: &mut Context,
-    target_language: &str,
-    analysis: &mut AnalysisMetadata,
-    jpeg: &[u8],
-) -> Result<Vec<TermConflict>, TranslationError> {
-    if page.regions.is_empty() {
-        return Ok(Vec::new());
-    }
-    if jpeg.is_empty() {
-        return Err(TranslationError::Invalid(
-            "visual translation requires a page image".into(),
-        ));
-    }
-    let mut request = request(page, upcoming, context, target_language, Some(analysis))?;
-    let RenderedPrompt {
-        mut system,
-        include_terminology: include_terms,
-        include_context,
-        use_style,
-    } = translation_instructions(
-        true,
-        target_language,
-        translator.prompt_template(),
-        translator.prompt_variables(),
-    )?;
-    if !include_terms {
-        request.glossary.clear();
-        request.proposed_terms.clear();
-    }
-    if !include_context {
-        request.clear_history();
-    }
-    add_memory_instructions(&mut system, !request.translation_memory.is_empty());
-    let expected = request.regions.iter().map(|region| region.id).collect();
-    add_requested_ids(&mut system, &expected, translator.prompt_template());
-    let raw = translator
-        .complete_with_image(&system, &serde_json::to_string(&request)?, jpeg)
-        .await?;
-    let response = validate_response(&raw, &expected, context, true, !include_terms)?;
-    let conflicts = response.conflicts.clone();
-    apply_response(
-        page,
-        context,
-        Some(analysis),
-        response,
-        target_language,
-        use_style,
-    );
-    Ok(conflicts)
-}
-
-/// Fills only missing or blank translations, preserving existing dialogue and annotations.
-///
-/// The full page is supplied as read-only context, then remembered once in
-/// reading order after the response validates. A JPEG selects visual translation
-/// and requires analysis metadata. Complete and empty pages do not call the translator.
-///
-/// # Errors
-///
-/// Fails like [`translate_missing_page_with_crops`].
-pub async fn translate_missing_page(
-    translator: &impl Translator,
-    page: &mut Page,
-    upcoming: Option<&Page>,
-    context: &mut Context,
-    target_language: &str,
-    analysis: Option<&mut AnalysisMetadata>,
-    jpeg: Option<&[u8]>,
-) -> Result<Vec<TermConflict>, TranslationError> {
-    translate_missing_page_with_crops(
-        translator,
-        page,
-        upcoming,
-        context,
-        target_language,
-        analysis,
-        jpeg.map(|jpeg| VisualInput { jpeg, crops: &[] }),
-    )
-    .await
-}
-
-/// Fills missing translations using a page image and optional labeled close-ups.
-///
-/// # Errors
-///
-/// Fails like [`translate_page_visual`] for visual input and like
-/// [`translate_page`] otherwise; on error the page, context, and analysis are unchanged.
+/// [`TranslationError::Invalid`] when the input or response fails validation,
+/// including an empty page image or `analysis` that does not describe `page`;
+/// on error the page, context, and analysis are unchanged.
 ///
 /// # Panics
 ///
 /// Panics only if a region validated against the page or analysis disappears
 /// between validation and application, which cannot happen.
-pub async fn translate_missing_page_with_crops(
+pub async fn translate_missing_page(
     translator: &impl Translator,
     page: &mut Page,
     upcoming: Option<&Page>,
@@ -810,7 +671,7 @@ pub async fn translate_missing_page_with_crops(
         request.clear_history();
     }
     add_memory_instructions(&mut system, !request.translation_memory.is_empty());
-    system.push_str("\n\npage_context contains the entire current page in reading order. Existing translations, corrected source and speakers are read-only reviewed context, including dialogue after requested regions. Translate only regions; never return or revise other IDs.");
+    system.push_str(PAGE_CONTEXT_INSTRUCTIONS);
     if !crops.is_empty() {
         system.push_str("\n\nAdditional labeled images are close-ups of the original page for the specified region IDs. Use them to read small lettering; the first image and original_size still describe the whole page.");
     }
@@ -920,18 +781,33 @@ pub fn remember_page(page: &Page, analysis: Option<&AnalysisMetadata>, context: 
     }
 }
 
-fn match_text(text: &str) -> String {
+/// The text-matching key shared by translation memory and terminology checks:
+/// whitespace runs collapse to one space and ASCII letters are lowercased.
+#[must_use]
+pub fn match_text(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
 }
 
-fn mentions(text: &str, term: &str) -> bool {
+/// Whether `text` contains `term` without the term's ASCII word edges
+/// continuing into a neighboring word; both are expected as [`match_text`] keys.
+#[must_use]
+pub fn mentions(text: &str, term: &str) -> bool {
     let word = |c: char| c.is_ascii_alphanumeric() || c == '_';
     text.match_indices(term).any(|(start, _)| {
         (!term.starts_with(word) || !text[..start].ends_with(word))
             && (!term.ends_with(word) || !text[start + term.len()..].starts_with(word))
+    })
+}
+
+/// Whether a custom prompt template uses the `{{name}}` variable.
+#[must_use]
+pub fn template_uses(template: &str, name: &str) -> bool {
+    template.split("{{").skip(1).any(|part| {
+        part.split_once("}}")
+            .is_some_and(|(variable, _)| variable.trim() == name)
     })
 }
 
@@ -1304,54 +1180,6 @@ fn format_simplified_dialogue(source: &str, text: &mut String) {
     }
 }
 
-fn apply_response(
-    page: &mut Page,
-    context: &mut Context,
-    mut analysis: Option<&mut AnalysisMetadata>,
-    mut response: ValidatedResponse,
-    target_language: &str,
-    use_style: bool,
-) {
-    let simplified = use_style && simplified_chinese(target_language);
-    for region in &mut page.regions {
-        let mut item = response
-            .translations
-            .remove(&region.block.id)
-            .expect("validated region id");
-        if simplified {
-            let source = item.source.as_deref().unwrap_or(&region.block.text);
-            format_simplified_dialogue(source, &mut item.text);
-        }
-        if let Some(analysis) = &mut analysis {
-            let geometry = analysis
-                .regions
-                .iter_mut()
-                .find(|geometry| geometry.region_id == region.block.id)
-                .expect("validated analysis region id");
-            geometry.corrected_source.clone_from(&item.source);
-            geometry.speaker.clone_from(&item.speaker);
-            geometry.semantic_source =
-                (item.source.is_some() || item.speaker.is_some()).then_some(SemanticSource::Model);
-        }
-        context.remember_exchange(Exchange {
-            source: item.source.unwrap_or_else(|| region.block.text.clone()),
-            target: item.text.clone(),
-            speaker: item.speaker,
-        });
-        region.translation = Some(item.text);
-    }
-    context.proposed_terms = response.proposed_terms;
-    if let Some(analysis) = analysis {
-        analysis.scene_summary.clone_from(&response.scene_summary);
-        analysis.scene_summary_source = response
-            .scene_summary
-            .as_ref()
-            .map(|_| SemanticSource::Model);
-    }
-    if response.scene_summary.is_some() {
-        context.scene_summary = response.scene_summary;
-    }
-}
 #[cfg(test)]
 #[expect(
     clippy::unused_async_trait_impl,
@@ -1361,24 +1189,26 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
 
-    // The page functions are async; these tests drive them to completion.
-    fn translate_page(
+    // The page function is async; these tests drive it to completion.
+    fn translate_text(
         translator: &impl Translator,
         page: &mut Page,
         upcoming: Option<&Page>,
         context: &mut Context,
         target_language: &str,
     ) -> Result<Vec<TermConflict>, TranslationError> {
-        block_on(super::translate_page(
+        translate_missing(
             translator,
             page,
             upcoming,
             context,
             target_language,
-        ))
+            None,
+            None,
+        )
     }
 
-    fn translate_page_visual(
+    fn translate_visual(
         translator: &impl Translator,
         page: &mut Page,
         upcoming: Option<&Page>,
@@ -1387,18 +1217,18 @@ mod tests {
         analysis: &mut AnalysisMetadata,
         jpeg: &[u8],
     ) -> Result<Vec<TermConflict>, TranslationError> {
-        block_on(super::translate_page_visual(
+        translate_missing(
             translator,
             page,
             upcoming,
             context,
             target_language,
-            analysis,
-            jpeg,
-        ))
+            Some(analysis),
+            Some(jpeg),
+        )
     }
 
-    fn translate_missing_page(
+    fn translate_missing(
         translator: &impl Translator,
         page: &mut Page,
         upcoming: Option<&Page>,
@@ -1407,14 +1237,14 @@ mod tests {
         analysis: Option<&mut AnalysisMetadata>,
         jpeg: Option<&[u8]>,
     ) -> Result<Vec<TermConflict>, TranslationError> {
-        block_on(super::translate_missing_page(
+        block_on(translate_missing_page(
             translator,
             page,
             upcoming,
             context,
             target_language,
             analysis,
-            jpeg,
+            jpeg.map(|jpeg| VisualInput { jpeg, crops: &[] }),
         ))
     }
 
@@ -1532,7 +1362,7 @@ mod tests {
         ] {
             let mut page = page();
             let mut context = Context::default();
-            translate_page(&Reply(raw), &mut page, None, &mut context, "zh-CN").unwrap_err();
+            translate_text(&Reply(raw), &mut page, None, &mut context, "zh-CN").unwrap_err();
             assert!(page.regions[0].translation.is_none());
             assert!(context.recent.is_empty());
         }
@@ -1541,20 +1371,18 @@ mod tests {
     fn extra_response_metadata_does_not_discard_valid_translations() {
         let mut page = page();
         let mut context = Context::default();
-        translate_page(
-            &Reply(r#"{"translations":[{"id":1,"text":"你好，马克！"}],"scene_summary_note":"Additional model explanation"}"#),
-            &mut page,
-            None,
-            &mut context,
-            "zh-CN",
-        )
+        translate_text(&Reply(r#"{"translations":[{"id":1,"text":"你好，马克！"}],"scene_summary_note":"Additional model explanation"}"#),
+        &mut page,
+        None,
+        &mut context,
+        "zh-CN",)
         .unwrap();
         assert_eq!(page.regions[0].translation.as_deref(), Some("你好，马克！"));
         assert_eq!(context.recent.len(), 1);
 
         let mut incomplete_page = self::page();
         let mut context = Context::default();
-        translate_page(
+        translate_text(
             &Reply(r#"{"translations":[],"scene_summary_note":"Not a translation"}"#),
             &mut incomplete_page,
             None,
@@ -1569,12 +1397,13 @@ mod tests {
     fn model_candidates_can_be_corrected_but_confirmation_is_authoritative() {
         let mut page = page();
         let mut context = Context::default();
-        translate_page(&Reply(r#"{"translations":[{"id":1,"text":"你好，马克！"}],"terms":[{"source":"Mark","target":"马克"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
+        translate_text(&Reply(r#"{"translations":[{"id":1,"text":"你好，马克！"}],"terms":[{"source":"Mark","target":"马克"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
         assert!(context.glossary.is_empty());
         assert_eq!(context.proposed_terms["Mark"], "马克");
         assert_eq!(context.recent.len(), 1);
         assert_eq!(page.regions[0].translation.as_deref(), Some("你好，马克！"));
-        translate_page(&Reply(r#"{"translations":[{"id":1,"text":"你好，马可！"}],"terms":[{"source":" MARK ","target":"马可"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
+        page.regions[0].translation = None;
+        translate_text(&Reply(r#"{"translations":[{"id":1,"text":"你好，马可！"}],"terms":[{"source":" MARK ","target":"马可"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
         assert!(context.glossary.is_empty());
         assert_eq!(
             context.proposed_terms,
@@ -1584,7 +1413,8 @@ mod tests {
             .confirm_terms(&BTreeMap::from([("Mark".into(), "马克".into())]))
             .unwrap();
         assert!(context.proposed_terms.is_empty());
-        let conflicts = translate_page(&Reply(r#"{"translations":[{"id":1,"text":"你好"}],"terms":[{"source":" mark ","target":"马可"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
+        page.regions[0].translation = None;
+        let conflicts = translate_text(&Reply(r#"{"translations":[{"id":1,"text":"你好"}],"terms":[{"source":" mark ","target":"马可"}]}"#), &mut page, None, &mut context, "zh-CN").unwrap();
         assert_eq!(page.regions[0].translation.as_deref(), Some("你好"));
         assert_eq!(context.glossary["Mark"], "马克");
         assert!(context.proposed_terms.is_empty());
@@ -1656,7 +1486,7 @@ mod tests {
         let (mut page, mut analysis, mut context) = visual_page();
         let before = serde_json::to_value((&page, &analysis, &context)).unwrap();
         let text = json!({"translations":[{"id":1,"text":"不会保存"}],"terms":terms}).to_string();
-        translate_page(&Reply(&text), &mut page, None, &mut context, "zh-CN").unwrap_err();
+        translate_text(&Reply(&text), &mut page, None, &mut context, "zh-CN").unwrap_err();
         assert_eq!(
             serde_json::to_value((&page, &analysis, &context)).unwrap(),
             before
@@ -1664,7 +1494,7 @@ mod tests {
         let response = VisualReply::new(
             json!({"translations":[{"id":1,"text":"不会保存","source":"Corrected","speaker":"person"}],"terms":terms,"scene_summary":"Not saved"}),
         );
-        translate_page_visual(
+        translate_visual(
             &response,
             &mut page,
             None,
@@ -1687,7 +1517,7 @@ mod tests {
             "translations":[{"id":1,"text":"你好","source":"Hello, Mark!"}],
             "terms":[{"source":" mark ","target":"马可"}]
         }));
-        let conflicts = translate_page_visual(
+        let conflicts = translate_visual(
             &reply,
             &mut page,
             None,
@@ -1721,25 +1551,27 @@ mod tests {
         let extra = Reply(
             r#"{"translations":[{"id":1,"text":"继续翻译"}],"terms":[{"source":"Extra","target":"名字"}]}"#,
         );
-        translate_page(&extra, &mut page, None, &mut context, "zh-CN").unwrap();
+        translate_text(&extra, &mut page, None, &mut context, "zh-CN").unwrap();
         assert_eq!(context.proposed_terms.len(), MAX_RETURNED_TERMS + 1);
         let correction = Reply(
             r#"{"translations":[{"id":1,"text":"已更正"}],"terms":[{"source":" NAME0 ","target":"新名字"},{"source":"name0","target":"新名字"}]}"#,
         );
-        translate_page(&correction, &mut page, None, &mut context, "zh-CN").unwrap();
+        page.regions[0].translation = None;
+        translate_text(&correction, &mut page, None, &mut context, "zh-CN").unwrap();
         assert_eq!(context.proposed_terms.len(), MAX_RETURNED_TERMS + 1);
         assert_eq!(context.proposed_terms["NAME0"], "新名字");
         assert!(context.glossary.is_empty());
 
+        page.regions[0].translation = None;
         let before = serde_json::to_value((&page, &context)).unwrap();
         let oversized = json!({"translations":[{"id":1,"text":"不会保存"}],"terms":(0..=MAX_RETURNED_TERMS).map(|i| json!({"source":format!("New{i}"),"target":"名字"})).collect::<Vec<_>>()}).to_string();
-        translate_page(&Reply(&oversized), &mut page, None, &mut context, "zh-CN").unwrap_err();
+        translate_text(&Reply(&oversized), &mut page, None, &mut context, "zh-CN").unwrap_err();
         assert_eq!(serde_json::to_value((&page, &context)).unwrap(), before);
 
         // Invalid stored terminology still fails before a model call.
         context.proposed_terms.insert(" ".into(), "名字".into());
         let captured = CapturedRequests::default();
-        translate_page(&captured, &mut page, None, &mut context, "zh-CN").unwrap_err();
+        translate_text(&captured, &mut page, None, &mut context, "zh-CN").unwrap_err();
         assert!(captured.0.borrow().is_empty());
     }
 
@@ -1771,7 +1603,7 @@ mod tests {
         next.regions[0].block.text = "Place597 is empty.".into();
         let small = CapturedRequests::default();
         let large = CapturedRequests::default();
-        translate_page(
+        translate_text(
             &small,
             &mut current.clone(),
             Some(&next),
@@ -1779,7 +1611,7 @@ mod tests {
             "zh-CN",
         )
         .unwrap();
-        translate_page(
+        translate_text(
             &large,
             &mut current,
             Some(&next),
@@ -1841,7 +1673,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         let captured = CapturedRequests::default();
-        translate_page(&captured, &mut current, None, &mut context.clone(), "zh-CN").unwrap();
+        translate_text(&captured, &mut current, None, &mut context.clone(), "zh-CN").unwrap();
         let input = &captured.0.borrow()[0].1;
         assert_eq!(input["glossary"].as_object().unwrap().len(), 80);
     }
@@ -1970,9 +1802,8 @@ mod tests {
         context.scene_summary = Some("Earlier scene".into());
         let mut visual_page = page.clone();
         let mut visual_context = context.clone();
-        translate_missing_page(&service, &mut page, None, &mut context, "zh-CN", None, None)
-            .unwrap();
-        translate_missing_page(
+        translate_missing(&service, &mut page, None, &mut context, "zh-CN", None, None).unwrap();
+        translate_missing(
             &service,
             &mut visual_page,
             None,
@@ -2059,7 +1890,7 @@ mod tests {
         page.regions[0].block.text = "Mark arrives".into();
         context.glossary.insert("Mark".into(), "马克".into());
         context.remember("Earlier source".into(), "前文译文".into());
-        translate_page(&WithTerms, &mut page, None, &mut context, "zh-CN").unwrap();
+        translate_text(&WithTerms, &mut page, None, &mut context, "zh-CN").unwrap();
         assert_eq!(page.regions[0].translation.as_deref(), Some("马克来了"));
     }
 
@@ -2079,7 +1910,7 @@ mod tests {
             ("{{style}} {{response_schema}}", "好"),
         ] {
             let (mut page, _, mut context) = visual_page();
-            translate_missing_page(
+            translate_missing(
                 &Prompt(prompt),
                 &mut page,
                 None,
@@ -2151,7 +1982,7 @@ mod tests {
         let response = VisualReply::new(json!({
             "translations":[{"id":1,"text":"介意我插句话吗","source":"MIND IF I STEP IN?"}]
         }));
-        translate_page_visual(
+        translate_visual(
             &response,
             &mut page,
             None,
@@ -2172,7 +2003,7 @@ mod tests {
         let response = VisualReply::new(json!({
             "translations":[{"id":1,"text":"你知道吗","source":"A question?"}]
         }));
-        translate_missing_page(
+        translate_missing(
             &response,
             &mut page,
             None,
@@ -2191,7 +2022,7 @@ mod tests {
         let mut text_page = self::page();
         text_page.regions[0].block.text = "MIND IF I STEP IN?".into();
         let mut context = Context::default();
-        translate_page(
+        translate_text(
             &Reply(r#"{"translations":[{"id":1,"text":"介意我插句话吗"}]}"#),
             &mut text_page,
             None,
@@ -2218,7 +2049,7 @@ mod tests {
             context.remember("Reviewed".into(), "人工审校。".into());
             let mut text_page = page.clone();
             let mut text_context = context.clone();
-            translate_page(
+            translate_text(
                 &Reply(r#"{"translations":[{"id":1,"text":"好。"}]}"#),
                 &mut text_page,
                 None,
@@ -2226,7 +2057,7 @@ mod tests {
                 language,
             )
             .unwrap();
-            translate_page_visual(
+            translate_visual(
                 &VisualReply::new(json!({
                     "translations":[{"id":1,"text":"好。","source":"Fine.","speaker":"母亲。"}],
                     "scene_summary":"母亲答应了。"
@@ -2277,8 +2108,8 @@ mod tests {
             let mut visual_context = text_context.clone();
             let mut analysis =
                 AnalysisMetadata::new(&image::RgbImage::new(100, 100), vec![], &visual_page);
-            translate_page(&captured, &mut text_page, None, &mut text_context, language).unwrap();
-            translate_page_visual(
+            translate_text(&captured, &mut text_page, None, &mut text_context, language).unwrap();
+            translate_visual(
                 &captured,
                 &mut visual_page,
                 None,
@@ -2302,11 +2133,18 @@ mod tests {
             // language supplement only for Simplified Chinese.
             let text_prefix = instructions(INSTRUCTIONS, "en");
             let visual_prefix = instructions(VISUAL_INSTRUCTIONS, "en");
-            let text_style = requests[0].0.strip_prefix(&text_prefix).unwrap();
+            let text_style = requests[0]
+                .0
+                .strip_prefix(&text_prefix)
+                .unwrap()
+                .strip_suffix(PAGE_CONTEXT_INSTRUCTIONS)
+                .unwrap();
             let visual_guidance = format!("\n\n{VISUAL_NON_TEXT_INSTRUCTIONS}");
             let visual_style = requests[1]
                 .0
                 .strip_prefix(&visual_prefix)
+                .unwrap()
+                .strip_suffix(PAGE_CONTEXT_INSTRUCTIONS)
                 .unwrap()
                 .strip_suffix(&visual_guidance)
                 .unwrap();
@@ -2383,7 +2221,7 @@ mod tests {
         let reply = VisualReply::new(
             json!({"translations":[{"id":1,"text":"你好，马克！","source":"Hello, Mark!","speaker":"woman beside the table"}],"terms":[{"source":"Mark","target":"马克"}],"scene_summary":"Mark speaks with the woman at home."}),
         );
-        translate_page_visual(
+        translate_visual(
             &reply,
             &mut page,
             None,
@@ -2451,7 +2289,7 @@ mod tests {
         ] {
             let (mut page, mut analysis, mut context) = visual_page();
             let before = serde_json::to_value((&page, &analysis, &context)).unwrap();
-            translate_page_visual(
+            translate_visual(
                 &VisualReply::new(raw),
                 &mut page,
                 None,
@@ -2473,7 +2311,7 @@ mod tests {
         let (mut page, mut analysis, mut context) = visual_page();
         let reply = VisualReply::new(json!({"translations":[{"id":1,"text":"你好"}]}));
         analysis.regions.push(analysis.regions[0].clone());
-        translate_page_visual(
+        translate_visual(
             &reply,
             &mut page,
             None,
@@ -2484,7 +2322,7 @@ mod tests {
         )
         .unwrap_err();
         analysis.regions.clear();
-        translate_page_visual(
+        translate_visual(
             &reply,
             &mut page,
             None,
@@ -2510,7 +2348,7 @@ mod tests {
         let reply = VisualReply::new(
             json!({"translations":[{"id":3,"text":"第二句","source":"Second!"},{"id":1,"text":"第一句","source":"Hello!"}]}),
         );
-        translate_page_visual(
+        translate_visual(
             &reply,
             &mut page,
             None,
@@ -2568,7 +2406,7 @@ mod tests {
             "translations":[{"id":0,"text":"新译文。","source":"Do not replace reviewed OCR","speaker":"Wrong speaker"}],
             "scene_summary":"Do not replace reviewed scene"
         }));
-        translate_missing_page(
+        translate_missing(
             &reply,
             &mut page,
             None,
@@ -2625,7 +2463,7 @@ mod tests {
         let reply = VisualReply::new(
             json!({"translations":[{"id":1,"text":"新译文"},{"id":2,"text":"覆盖人工"}]}),
         );
-        translate_missing_page(
+        translate_missing(
             &reply,
             &mut page,
             None,
@@ -2648,7 +2486,7 @@ mod tests {
         let before = serde_json::to_value(&page).unwrap();
         let reply = VisualReply::new(json!({}));
         let mut context = Context::default();
-        translate_missing_page(&reply, &mut page, None, &mut context, "zh-CN", None, None).unwrap();
+        translate_missing(&reply, &mut page, None, &mut context, "zh-CN", None, None).unwrap();
         assert_eq!(reply.calls.get(), 0);
         assert_eq!(serde_json::to_value(&page).unwrap(), before);
         assert_eq!(context.recent.len(), 1);
@@ -2671,7 +2509,7 @@ mod tests {
         let reply = VisualReply::new(
             json!({"translations":[{"id":1,"text":"你好"}],"scene_summary":summary}),
         );
-        translate_page_visual(
+        translate_visual(
             &reply,
             &mut page,
             Some(&upcoming),
@@ -2697,7 +2535,7 @@ mod tests {
         let (mut page, mut analysis, mut context) = visual_page();
         let before = serde_json::to_value((&page, &analysis, &context)).unwrap();
         assert!(matches!(
-            translate_page_visual(
+            translate_visual(
                 &Reply("unused"),
                 &mut page,
                 None,

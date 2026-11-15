@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Record,
+    Issue, Record,
     error::{Error, fail},
     host::{Event, Host, PageSource, PageTask, WriteMode},
     source::{SourceManifest, page_reference, verify_page},
@@ -154,17 +154,16 @@ pub async fn analyze_page(
         let issues: Vec<_> = metadata
             .unresolved_regions
             .iter()
-            .map(|entry| {
-                format!(
-                    "unresolved text at {},{}: {}",
-                    entry.block.bounds.x, entry.block.bounds.y, entry.reason
-                )
+            .map(|entry| Issue::UnresolvedText {
+                x: entry.block.bounds.x,
+                y: entry.block.bounds.y,
+                reason: entry.reason.clone(),
             })
             .collect();
         for issue in &issues {
             host.report(Event::Warning {
                 page: None,
-                message: issue.clone(),
+                message: issue.to_string(),
             });
         }
         host.report(Event::PageAnalyzed {

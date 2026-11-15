@@ -5,6 +5,8 @@
 //! tests and in the browser; `wasm` adds their JavaScript glue, and `pipeline`
 //! runs the `camel-project` pipeline operations against JavaScript hosts.
 
+#![warn(missing_docs)]
+
 mod document;
 #[cfg(target_arch = "wasm32")]
 mod pipeline;

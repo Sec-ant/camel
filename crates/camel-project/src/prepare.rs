@@ -4,13 +4,13 @@ use futures::StreamExt as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use camel::translation::Translator as _;
+use camel::translation::{MAX_SUMMARY_CHARS, Translator as _};
 
 use crate::{
     Record,
     error::{Error, chain, fail},
     host::{Event, Host, WriteMode},
-    plan::{BATCH_PAGES, MAX_SUMMARY_CHARS, Plan, PlanKey, Scene, fingerprint, validate},
+    plan::{BATCH_PAGES, Plan, PlanKey, Scene, fingerprint, validate},
     remote::{Client, Remote, Service},
     store::{read_json, save},
 };

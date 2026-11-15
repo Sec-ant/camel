@@ -624,18 +624,9 @@ pub fn analyze(image: &RgbImage, blocks: Vec<TextBlock>) -> Page {
 }
 
 /// Reuse image-only detections from this same, unchanged source image.
-/// Text-dependent balloon geometry is recomputed for the supplied blocks.
-#[must_use]
-pub fn analyze_with_candidates(
-    image: &RgbImage,
-    blocks: Vec<TextBlock>,
-    panels: &[Rect],
-    candidates: &[Candidate],
-) -> Page {
-    analyze_with_candidates_and_hints(image, blocks, panels, candidates, &[], &[])
-}
-
-/// Use detected bubble bounds to set the search area for individual blocks.
+///
+/// Text-dependent balloon geometry is recomputed for the supplied blocks;
+/// detected bubble bounds in `hints` set the search area for individual blocks.
 #[must_use]
 pub fn analyze_with_candidates_and_hints(
     image: &RgbImage,
@@ -2420,7 +2411,14 @@ mod tests {
             let candidates = candidates(&image);
             for blocks in [vec![block.clone()], Vec::new()] {
                 let expected = analyze(&image, blocks.clone());
-                let reused = analyze_with_candidates(&image, blocks, &panels, &candidates);
+                let reused = analyze_with_candidates_and_hints(
+                    &image,
+                    blocks,
+                    &panels,
+                    &candidates,
+                    &[],
+                    &[],
+                );
                 assert_eq!(
                     serde_json::to_value(expected).unwrap(),
                     serde_json::to_value(reused).unwrap()

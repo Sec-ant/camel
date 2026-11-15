@@ -302,27 +302,43 @@ pub fn fit_block(
     if !usable(&region) {
         return Err(FitError::Unresolved);
     }
+    exclude_occupied(&mut region.bubble, existing)?;
+    Ok(region)
+}
+
+/// Removes from a new bubble every pixel that `existing` regions erase, and
+/// from its typesetting area also their typesetting areas, so the bubble never
+/// claims another region's pixels.
+///
+/// # Errors
+///
+/// Returns [`FitError::RepairOverlap`] when a bubble with a local paper repair
+/// would erase another region's pixels, since the repair cannot be cut, and
+/// [`FitError::Covered`] when no typesetting area remains or the existing
+/// regions erase every pixel of a nonempty erase mask.
+pub fn exclude_occupied(bubble: &mut Bubble, existing: &[Region]) -> Result<(), FitError> {
+    let erases = !bubble.erase.is_empty();
     let occupied: Vec<Span> = existing
         .iter()
         .flat_map(|other| other.bubble.erase.iter().copied())
         .collect();
-    if region.bubble.background_repair.is_some() {
-        if overlaps(&region.bubble.erase, &occupied) {
+    if bubble.background_repair.is_some() {
+        if overlaps(&bubble.erase, &occupied) {
             return Err(FitError::RepairOverlap);
         }
     } else {
-        region.bubble.erase = subtract(&region.bubble.erase, &occupied);
+        bubble.erase = subtract(&bubble.erase, &occupied);
     }
     let occupied_layout: Vec<Span> = existing
         .iter()
         .flat_map(|other| other.bubble.interior.iter().copied())
         .chain(occupied)
         .collect();
-    region.bubble.interior = subtract(&region.bubble.interior, &occupied_layout);
-    if region.bubble.erase.is_empty() || region.bubble.interior.is_empty() {
+    bubble.interior = subtract(&bubble.interior, &occupied_layout);
+    if (erases && bubble.erase.is_empty()) || bubble.interior.is_empty() {
         return Err(FitError::Covered);
     }
-    Ok(region)
+    Ok(())
 }
 
 /// How far a channel must differ from the fill for a pixel to count as lettering.

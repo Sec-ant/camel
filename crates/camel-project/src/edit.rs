@@ -1,20 +1,20 @@
 //! Typed edits of one project page.
 //!
 //! Every invariant that ties a page's dialogue to its translation checkpoint,
-//! translation context, issues and the project's translation plan is
-//! maintained here, so review files, region repairs and the workbench all
-//! change records the same way.
+//! scene summary, issues and the project's translation plan is maintained
+//! here, so review files, region repairs and the workbench all change records
+//! the same way.
 
 use camel::{
     Page, Rect, Region, Span, TextBlock, Word,
     analysis::{AnalysisMetadata, RegionGeometry},
-    mask, panels,
-    translation::Exchange,
+    mask::{self, FitError},
+    panels,
 };
 use image::RgbImage;
 use serde::Deserialize;
 
-use crate::{CONTENT_FILTER_ISSUE, Record, TRANSLATION_ISSUE};
+use crate::{Issue, Record};
 
 /// Smallest manual font size in original-image pixels.
 pub const MIN_FONT_SIZE: u32 = 10;
@@ -246,9 +246,9 @@ pub fn finish(record: &mut Record, plan_changed: bool) {
                     .is_some_and(|text| !text.trim().is_empty())
         })
     {
-        record.issues.retain(|issue| {
-            !issue.starts_with(TRANSLATION_ISSUE) || issue.starts_with(CONTENT_FILTER_ISSUE)
-        });
+        record
+            .issues
+            .retain(|issue| !matches!(issue, Issue::TranslationFailed { .. }));
     }
 }
 
@@ -284,7 +284,7 @@ pub fn context_source<'a>(analysis: Option<&'a AnalysisMetadata>, region: &'a Re
 }
 
 /// Sets a translation; blank text means untranslated. A manual change drops
-/// the recorded model and updates matching translation-context exchanges.
+/// the recorded model.
 ///
 /// # Errors
 ///
@@ -297,25 +297,12 @@ pub fn set_translation(
     let text = text.filter(|text| !text.trim().is_empty());
     let Record {
         page,
-        context,
-        analysis,
         translation_models,
         ..
     } = record;
     let region = region_mut(page, id)?;
     if region.translation == text {
         return Ok(());
-    }
-    if let (Some(context), Some(target)) = (context, &text) {
-        let corrected = analysis
-            .as_ref()
-            .and_then(|analysis| analysis.regions.iter().find(|g| g.region_id == id))
-            .and_then(|geometry| geometry.corrected_source.as_deref());
-        for pair in &mut context.recent {
-            if pair.source == region.block.text || corrected == Some(pair.source.as_str()) {
-                pair.target.clone_from(target);
-            }
-        }
     }
     region.translation = text;
     translation_models.remove(&id);
@@ -324,8 +311,8 @@ pub fn set_translation(
 
 /// Corrects a region's OCR text, keeping its word boxes and translation.
 ///
-/// The translation checkpoint and context follow the correction so a later
-/// `translate` run still accepts the page. The manual text supersedes any
+/// The translation checkpoint follows the correction so a later `translate`
+/// run still accepts the page. The manual text supersedes any
 /// model-proposed correction. Returns whether the text changed.
 ///
 /// # Errors
@@ -340,7 +327,6 @@ pub fn set_source(record: &mut Record, id: u32, text: &str) -> Result<bool, Edit
     if region.block.text == text {
         return Ok(false);
     }
-    let previous = context_source(record.analysis.as_ref(), region).to_owned();
     let region = region_mut(&mut record.page, id)?;
     text.clone_into(&mut region.block.text);
     if let Some(geometry) = geometry_mut(record, id) {
@@ -350,13 +336,6 @@ pub fn set_source(record: &mut Record, id: u32, text: &str) -> Result<bool, Edit
         for (snapshot_id, source) in snapshot.iter_mut() {
             if *snapshot_id == id {
                 text.clone_into(source);
-            }
-        }
-    }
-    if let Some(context) = &mut record.context {
-        for pair in &mut context.recent {
-            if pair.source == previous {
-                text.clone_into(&mut pair.source);
             }
         }
     }
@@ -427,8 +406,7 @@ pub fn remove_region(record: &mut Record, id: u32) -> Result<(), EditError> {
         .iter()
         .position(|region| region.block.id == id)
         .ok_or(EditError::UnknownRegion(id))?;
-    let region = record.page.regions.remove(position);
-    let source = context_source(record.analysis.as_ref(), &region).to_owned();
+    record.page.regions.remove(position);
     if let Some(analysis) = &mut record.analysis {
         analysis.regions.retain(|geometry| geometry.region_id != id);
     }
@@ -437,44 +415,7 @@ pub fn remove_region(record: &mut Record, id: u32) -> Result<(), EditError> {
     if let Some(snapshot) = &mut record.translated_source {
         snapshot.retain(|(snapshot_id, _)| *snapshot_id != id);
     }
-    if let (Some(context), Some(target)) = (&mut record.context, region.translation)
-        && let Some(position) = context
-            .recent
-            .iter()
-            .rposition(|exchange| exchange.source == source && exchange.target == target)
-    {
-        context.recent.remove(position);
-    }
     Ok(())
-}
-
-/// Records a new region's exchange in the translation context before the
-/// region is inserted at `insertion`, keeping context order equal to reading order.
-pub fn remember_inserted(record: &mut Record, insertion: usize, exchange: Exchange) {
-    let Record {
-        page,
-        context,
-        analysis,
-        ..
-    } = record;
-    let Some(context) = context else {
-        return;
-    };
-    let mut recent = std::mem::take(&mut context.recent);
-    let position = page.regions[insertion..].iter().find_map(|region| {
-        let text = context_source(analysis.as_ref(), region);
-        recent.iter().position(|exchange| {
-            exchange.source == text && Some(&exchange.target) == region.translation.as_ref()
-        })
-    });
-    if let Some(index) =
-        position.or_else(|| (insertion == page.regions.len()).then_some(recent.len()))
-    {
-        recent.insert(index, exchange);
-    }
-    for exchange in recent {
-        context.remember_with_speaker(exchange.source, exchange.target, exchange.speaker);
-    }
 }
 
 /// Inserts a region and its analysis geometry at `insertion`, extending the
@@ -514,10 +455,11 @@ pub fn resolve_unresolved(record: &mut Record, id: u32) {
         return;
     };
     let unresolved = analysis.unresolved_regions.remove(position);
-    let issue = format!(
-        "unresolved text at {},{}: {}",
-        unresolved.block.bounds.x, unresolved.block.bounds.y, unresolved.reason
-    );
+    let issue = Issue::UnresolvedText {
+        x: unresolved.block.bounds.x,
+        y: unresolved.block.bounds.y,
+        reason: unresolved.reason,
+    };
     record.issues.retain(|existing| existing != &issue);
 }
 
@@ -612,9 +554,10 @@ fn reading_position(record: &Record, panels: &[Rect], region: &Region) -> usize 
         .map_or(0, |position| position + 1)
 }
 
-/// Derives geometry for `block` from the page image when possible; otherwise
-/// the block rectangle becomes a flat-filled typesetting area whose lettering
-/// pixels form the erase mask.
+/// Derives geometry for `block` from the page image when possible. When the
+/// image yields no usable balloon, the block rectangle becomes a flat-filled
+/// typesetting area whose lettering pixels form the erase mask. Either way the
+/// new region never claims pixels that existing regions erase or typeset in.
 fn derive_region(
     record: &Record,
     image: &RgbImage,
@@ -622,33 +565,29 @@ fn derive_region(
     block: TextBlock,
     hint: Option<Rect>,
 ) -> Result<Region, EditError> {
-    if let Ok(region) = mask::fit_block(image, &record.page.regions, panels, block.clone(), hint) {
-        return Ok(region);
+    let existing = &record.page.regions;
+    let overlap =
+        |error: FitError| invalid(format!("The new region overlaps existing regions: {error}"));
+    match mask::fit_block(image, existing, panels, block.clone(), hint) {
+        Ok(region) => Ok(region),
+        Err(FitError::Missing | FitError::Unresolved) => {
+            let mut bubble = mask::rectangle_bubble(image, block.bounds)
+                .ok_or_else(|| invalid("Region lies outside the image"))?;
+            mask::exclude_occupied(&mut bubble, existing).map_err(overlap)?;
+            Ok(Region {
+                block,
+                bubble,
+                translation: None,
+                font_size: None,
+            })
+        }
+        Err(error) => Err(overlap(error)),
     }
-    let bubble = mask::rectangle_bubble(image, block.bounds)
-        .ok_or_else(|| invalid("Region lies outside the image"))?;
-    Ok(Region {
-        block,
-        bubble,
-        translation: None,
-        font_size: None,
-    })
 }
 
 fn insert_new_region(record: &mut Record, panels: &[Rect], region: Region) -> u32 {
     let id = region.block.id;
     let insertion = reading_position(record, panels, &region);
-    if let Some(target) = region.translation.clone() {
-        remember_inserted(
-            record,
-            insertion,
-            Exchange {
-                source: region.block.text.clone(),
-                target,
-                speaker: None,
-            },
-        );
-    }
     let geometry = new_geometry(panels, &region, &record.page);
     insert_region(record, insertion, region, geometry);
     id
@@ -757,10 +696,10 @@ mod tests {
                 region(0, 10, "ONE", Some("甲")),
                 region(1, 150, "TWO", None),
             ]},
-            "context": {"glossary": {}, "recent": [{"source": "ONE", "target": "甲"}], "scene_summary": "scene"},
+            "context": {"glossary": {}, "scene_summary": "scene"},
             "translated_source": [[0, "ONE"], [1, "TWO"]],
             "translation_models": {"0": "model"},
-            "issues": ["unresolved text at 80,60: no area", "translation unresolved: failed"],
+            "issues": [{"kind": "unresolved_text", "x": 80, "y": 60, "reason": "no area"}, {"kind": "translation_failed", "error": "failed"}],
             "analysis": {
                 "schema_version": 1, "coordinate_system": "image_pixels_top_left",
                 "panels": [{"id": 0, "bounds": {"x": 0, "y": 0, "width": 200, "height": 100}, "contour": []}],
@@ -786,7 +725,6 @@ mod tests {
     #[test]
     fn source_correction_keeps_translation_checkpoint_consistent() {
         let mut record = record();
-        record.context.as_mut().unwrap().recent[0].source = "ONE!".into();
         let edits = vec![Edit::SetSource {
             region: 0,
             text: " UNO ".into(),
@@ -799,7 +737,6 @@ mod tests {
             Some([(0, "UNO".to_owned()), (1, "TWO".to_owned())].as_slice())
         );
         let context = record.context.as_ref().unwrap();
-        assert_eq!(context.recent[0].source, "UNO");
         assert_eq!(context.scene_summary, None);
         assert!(record.summary_invalidated);
         assert_eq!(
@@ -825,20 +762,20 @@ mod tests {
         let applied = apply(&mut record, edits, &mut white).unwrap();
         assert!(!applied.plan_changed);
         assert!(record.translation_models.is_empty());
-        assert_eq!(record.context.as_ref().unwrap().recent[0].target, "丙");
-        assert_eq!(record.issues, ["unresolved text at 80,60: no area"]);
+        assert_eq!(
+            record.issues,
+            [Issue::UnresolvedText {
+                x: 80,
+                y: 60,
+                reason: "no area".into()
+            }]
+        );
         assert!(!record.summary_invalidated);
     }
 
     #[test]
-    fn added_region_joins_reading_order_checkpoint_and_context() {
+    fn added_region_joins_reading_order_and_checkpoint() {
         let mut record = record();
-        record.page.regions[1].translation = Some("乙".into());
-        record.context.as_mut().unwrap().recent.push(Exchange {
-            source: "TWO".into(),
-            target: "乙".into(),
-            speaker: None,
-        });
         let edits = vec![Edit::AddRegion {
             bounds: Rect {
                 x: 90,
@@ -869,15 +806,53 @@ mod tests {
             record.translated_source.as_ref().unwrap()[1],
             (7, "NEW".into())
         );
-        let recent: Vec<_> = record
-            .context
-            .as_ref()
-            .unwrap()
-            .recent
-            .iter()
-            .map(|e| e.source.as_str())
-            .collect();
-        assert_eq!(recent, ["ONE", "NEW", "TWO"]);
+    }
+
+    #[test]
+    fn added_region_never_claims_existing_region_pixels() {
+        let mut record = record();
+        let overlapping = Rect {
+            x: 20,
+            y: 10,
+            width: 30,
+            height: 10,
+        };
+        let edits = vec![Edit::AddRegion {
+            bounds: overlapping,
+            source: "NEW".into(),
+            translation: None,
+        }];
+        let created = apply(&mut record, edits, &mut white).unwrap().created[0];
+        let [existing, added] = [0, created].map(|id| {
+            record
+                .page
+                .regions
+                .iter()
+                .find(|region| region.block.id == id)
+                .unwrap()
+        });
+        assert!(!added.bubble.interior.is_empty());
+        assert!(!mask::overlaps(
+            &added.bubble.interior,
+            &existing.bubble.interior
+        ));
+
+        let mut record = self::record();
+        let covered = Edit::AddRegion {
+            bounds: Rect {
+                x: 10,
+                y: 10,
+                width: 20,
+                height: 10,
+            },
+            source: "NEW".into(),
+            translation: None,
+        };
+        let error = apply(&mut record, vec![covered], &mut white).unwrap_err();
+        assert!(
+            error.to_string().contains("overlaps existing regions"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -893,7 +868,7 @@ mod tests {
             !record
                 .issues
                 .iter()
-                .any(|issue| issue.starts_with("unresolved text"))
+                .any(|issue| matches!(issue, Issue::UnresolvedText { .. }))
         );
         assert!(
             record
@@ -929,7 +904,7 @@ mod tests {
             !record
                 .issues
                 .iter()
-                .any(|issue| issue.starts_with("unresolved text"))
+                .any(|issue| matches!(issue, Issue::UnresolvedText { .. }))
         );
         assert_eq!(record.page.regions.len(), 2);
         assert!(matches!(
@@ -956,12 +931,7 @@ mod tests {
             record.translated_source.as_deref(),
             Some([(0, "ONE".to_owned())].as_slice())
         );
-        assert!(
-            !record
-                .issues
-                .iter()
-                .any(|issue| issue.starts_with(TRANSLATION_ISSUE))
-        );
+        assert!(!record.issues.iter().any(Issue::is_translation_failure));
         assert!(record.summary_invalidated);
     }
 
