@@ -36,6 +36,8 @@ export type PipelineEvent =
       readonly last: string;
     }
   | { readonly type: "scene_finished"; readonly scene: number; readonly failed: number; readonly filtered: number }
+  | { readonly type: "group_started"; readonly first: number; readonly last: number; readonly total: number }
+  | { readonly type: "group_finished"; readonly first: number; readonly last: number }
   | { readonly type: "notice"; readonly message: string }
   | { readonly type: "warning"; readonly page: string | null; readonly message: string }
   | {

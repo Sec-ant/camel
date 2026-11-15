@@ -325,11 +325,18 @@ pub fn fit_block(
     Ok(region)
 }
 
+/// How far a channel must differ from the fill for a pixel to count as lettering.
+/// Anti-aliased fringe below this stays; raising it leaves more of the original
+/// glyph edges visible, lowering it starts erasing paper texture.
+const INK_DISTANCE: u8 = 64;
+
 /// A plain rectangular bubble used when no balloon geometry can be derived.
 ///
-/// The clipped rectangle is the typesetting area, nothing is erased, and the
-/// flat fill is the per-channel median of the rectangle's border pixels.
-/// Returns `None` when the rectangle lies outside the image.
+/// The clipped rectangle is the typesetting area and the flat fill is the
+/// per-channel median of the rectangle's border pixels. Pixels that differ
+/// clearly from that fill are taken as lettering: they are the glyph mask, and
+/// the erase mask adds one pixel around them. Returns `None` when the rectangle
+/// lies outside the image.
 #[must_use]
 pub fn rectangle_bubble(image: &RgbImage, rect: Rect) -> Option<Bubble> {
     let right = rect.right().min(image.width());
@@ -365,6 +372,52 @@ pub fn rectangle_bubble(image: &RgbImage, rect: Rect) -> Option<Bubble> {
         values.sort_unstable();
         values[values.len() / 2]
     });
+    let width = (right - bounds.x) as usize;
+    let height = (bottom - bounds.y) as usize;
+    let mut ink = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            let pixel = image.get_pixel(bounds.x + x as u32, bounds.y + y as u32).0;
+            ink[y * width + x] = pixel
+                .iter()
+                .zip(background)
+                .any(|(&value, fill)| value.abs_diff(fill) > INK_DISTANCE);
+        }
+    }
+    let mut erase = ink.clone();
+    for y in 0..height {
+        for x in 0..width {
+            if ink[y * width + x] {
+                for ny in y.saturating_sub(1)..(y + 2).min(height) {
+                    for nx in x.saturating_sub(1)..(x + 2).min(width) {
+                        erase[ny * width + nx] = true;
+                    }
+                }
+            }
+        }
+    }
+    let spans = |mask: &[bool]| -> Vec<Span> {
+        let mut spans = Vec::new();
+        for y in 0..height {
+            let mut x = 0;
+            while x < width {
+                if mask[y * width + x] {
+                    let start = x;
+                    while x < width && mask[y * width + x] {
+                        x += 1;
+                    }
+                    spans.push(Span {
+                        y: bounds.y + y as u32,
+                        start: bounds.x + start as u32,
+                        end: bounds.x + x as u32,
+                    });
+                } else {
+                    x += 1;
+                }
+            }
+        }
+        spans
+    };
     Some(Bubble {
         bounds,
         interior: (bounds.y..bottom)
@@ -374,8 +427,8 @@ pub fn rectangle_bubble(image: &RgbImage, rect: Rect) -> Option<Bubble> {
                 end: right,
             })
             .collect(),
-        glyphs: Vec::new(),
-        erase: Vec::new(),
+        glyphs: spans(&ink),
+        erase: spans(&erase),
         background,
         background_model: None,
         background_repair: None,
@@ -549,7 +602,9 @@ mod tests {
             }
         );
         assert_eq!(bubble.interior.len(), 10);
-        assert!(bubble.erase.is_empty());
+        // The one dark pixel is the glyph; the erase mask also covers its neighbours.
+        assert_eq!(bubble.glyphs, vec![span(10, 20, 21)]);
+        assert_eq!(bubble.erase, vec![span(10, 20, 22), span(11, 20, 22)]);
         assert!(
             rectangle_bubble(
                 &image,

@@ -378,8 +378,10 @@ async fn audit_task(
 ) -> Result<TaskOutcome, Error> {
     let (start, end) = (task.start, task.end);
     let expected = expected_translations(pages, task);
-    report(Event::Notice {
-        message: format!("Auditing pages {}–{} of {}", start + 1, end, pages.len()),
+    report(Event::GroupStarted {
+        first: start + 1,
+        last: end,
+        total: pages.len(),
     });
     auditor.set_task(&format!("audit:{}-{}", pages[start].0, pages[end - 1].0));
     let group_pages = || {
@@ -411,7 +413,13 @@ async fn audit_task(
         let result = validate_response(&raw, &expected);
         auditor.finish(result.is_ok()).await?;
         match result {
-            Ok(found) => return Ok(TaskOutcome::Issues(found)),
+            Ok(found) => {
+                report(Event::GroupFinished {
+                    first: start + 1,
+                    last: end,
+                });
+                return Ok(TaskOutcome::Issues(found));
+            }
             Err(error) if attempt == 0 => {
                 report(Event::Notice {
                     message: format!(

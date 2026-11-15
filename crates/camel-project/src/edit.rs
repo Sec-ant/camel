@@ -595,7 +595,8 @@ fn reading_position(record: &Record, panels: &[Rect], region: &Region) -> usize 
 }
 
 /// Derives geometry for `block` from the page image when possible; otherwise
-/// the block rectangle becomes a flat-filled typesetting area with no erase mask.
+/// the block rectangle becomes a flat-filled typesetting area whose lettering
+/// pixels form the erase mask.
 fn derive_region(
     record: &Record,
     image: &RgbImage,

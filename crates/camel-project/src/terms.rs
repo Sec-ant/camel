@@ -5,7 +5,12 @@ use std::collections::BTreeMap;
 use camel::translation::Context;
 use serde_json::{Value, json};
 
-use crate::{Record, error::Error, host::Host, store::read_json};
+use crate::{
+    Record,
+    error::Error,
+    host::{Event, Host},
+    store::{read_json, read_optional_json},
+};
 
 fn normalized(text: &str) -> String {
     text.split_whitespace()
@@ -25,18 +30,30 @@ fn mentions(text: &str, term: &str) -> bool {
 /// Reports candidates for review; matching a term alone does not prove a
 /// translation error. Returns the report JSON.
 ///
+/// Without a glossary only the terminology conflicts already recorded on pages
+/// are reported.
+///
 /// # Errors
 ///
-/// Fails when `glossary.json` or a page record is missing or invalid.
+/// Fails when `glossary.json` or a page record is unreadable or invalid.
 pub async fn check_terms(host: &impl Host) -> Result<Value, Error> {
     let index: Vec<String> = read_json(host, "index.json").await?;
-    let glossary: BTreeMap<String, String> =
-        read_json(host, "glossary.json").await.map_err(|error| {
+    let glossary: BTreeMap<String, String> = read_optional_json(host, "glossary.json")
+        .await
+        .map_err(|error| {
             error.context(format!(
                 "read confirmed glossary {}",
                 host.locate("glossary.json")
             ))
-        })?;
+        })?
+        .unwrap_or_default();
+    if glossary.is_empty() {
+        host.report(Event::Notice {
+            message:
+                "No confirmed glossary terms; only recorded terminology conflicts are reported"
+                    .to_owned(),
+        });
+    }
     let mut context = Context::default();
     context.confirm_terms(&glossary)?;
     let terms: Vec<_> = context

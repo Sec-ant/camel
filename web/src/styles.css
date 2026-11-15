@@ -1625,6 +1625,7 @@ textarea.prompt {
 
 .log-tag {
   flex: none;
+  align-self: flex-start;
   padding: 0 4px;
   background: var(--ink);
   color: var(--paper);
