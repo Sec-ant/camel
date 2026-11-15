@@ -248,6 +248,7 @@ function PageInput({ index, count }: { index: number; count: number }) {
       size={4}
       onInput={(event) => setValue((event.currentTarget as HTMLInputElement).value)}
       onKeyDown={(event) => {
+        if (event.isComposing || event.keyCode === 229) return;
         if (event.key === "Enter") {
           go();
           (event.currentTarget as HTMLInputElement).blur();

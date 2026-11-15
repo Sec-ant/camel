@@ -227,6 +227,7 @@ function CommitText(props: CommitTextProps) {
       onInput={(event) => setText((event.currentTarget as HTMLTextAreaElement).value)}
       onBlur={() => void commit.current()}
       onKeyDown={(event) => {
+        if (event.isComposing || event.keyCode === 229) return;
         if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           void commit.current();
@@ -569,6 +570,7 @@ function DraftPanel() {
     }
   };
   const keys = (event: KeyboardEvent): void => {
+    if (event.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void create();
