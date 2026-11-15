@@ -1,0 +1,60 @@
+[package]
+name = "camel"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A composable comic translation pipeline"
+license = "MIT OR Apache-2.0"
+
+[workspace]
+members = ["crates/camel-cli", "crates/camel-vision"]
+default-members = ["crates/camel-cli"]
+resolver = "3"
+
+[dependencies]
+base64 = "0.22"
+ab_glyph = "0.2.32"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+jieba-rs = { version = "0.11", default-features = false }
+rars = { version = "=0.10.0", default-features = false }
+zip = { version = "7.2", default-features = false, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+[profile.dist]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+
+[profile.dist.package.camel]
+opt-level = 3
+
+[profile.dist.package.rten]
+opt-level = 3
+[profile.dist.package.rten-gemm]
+opt-level = 3
+[profile.dist.package.rten-tensor]
+opt-level = 3
+[profile.dist.package.rten-vecmath]
+opt-level = 3
+[profile.dist.package.rten-simd]
+opt-level = 3
