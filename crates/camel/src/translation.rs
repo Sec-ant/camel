@@ -248,14 +248,21 @@ pub struct VisualInput<'a> {
     pub crops: &'a [VisualCrop],
 }
 
-/// Adapter for a synchronous chat-completion transport.
+/// Adapter for an asynchronous chat-completion transport.
+///
+/// Futures carry no `Send` bound so single-threaded hosts such as
+/// WebAssembly can implement the transport with their own primitives.
+#[expect(
+    async_fn_in_trait,
+    reason = "translation futures are polled on the caller's executor; wasm transports are !Send"
+)]
 pub trait Translator {
     /// Completes one text-only request and returns the raw model reply.
     ///
     /// # Errors
     ///
     /// Returns a service error when the transport or provider fails.
-    fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError>;
+    async fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError>;
 
     /// Optional system prompt template; built-in instructions are used by default.
     fn prompt_template(&self) -> Option<&str> {
@@ -272,7 +279,7 @@ pub trait Translator {
     /// # Errors
     ///
     /// The default implementation returns [`TranslationError::UnsupportedVision`].
-    fn complete_with_image(
+    async fn complete_with_image(
         &self,
         _system: &str,
         _input: &str,
@@ -287,7 +294,7 @@ pub trait Translator {
     ///
     /// The default implementation delegates to [`Translator::complete_with_image`]
     /// without crops and returns [`TranslationError::UnsupportedVision`] otherwise.
-    fn complete_with_crops(
+    async fn complete_with_crops(
         &self,
         system: &str,
         input: &str,
@@ -295,7 +302,7 @@ pub trait Translator {
         crops: &[VisualCrop],
     ) -> Result<String, TranslationError> {
         if crops.is_empty() {
-            self.complete_with_image(system, input, jpeg)
+            self.complete_with_image(system, input, jpeg).await
         } else {
             Err(TranslationError::UnsupportedVision)
         }
@@ -575,7 +582,7 @@ struct ValidatedResponse {
 /// Returns the translator's error, or [`TranslationError::Json`] or
 /// [`TranslationError::Invalid`] when the input or response fails validation; on
 /// error the page and context are unchanged.
-pub fn translate_page(
+pub async fn translate_page(
     translator: &impl Translator,
     page: &mut Page,
     upcoming: Option<&Page>,
@@ -607,7 +614,9 @@ pub fn translate_page(
     add_memory_instructions(&mut system, !request.translation_memory.is_empty());
     let expected = request.regions.iter().map(|region| region.id).collect();
     add_requested_ids(&mut system, &expected, translator.prompt_template());
-    let raw = translator.complete(&system, &serde_json::to_string(&request)?)?;
+    let raw = translator
+        .complete(&system, &serde_json::to_string(&request)?)
+        .await?;
     let response = validate_response(&raw, &expected, context, false, !include_terms)?;
     let conflicts = response.conflicts.clone();
     apply_response(page, context, None, response, target_language, use_style);
@@ -620,7 +629,7 @@ pub fn translate_page(
 ///
 /// Fails like [`translate_page`], and with [`TranslationError::Invalid`] when
 /// `jpeg` is empty or `analysis` does not describe `page`.
-pub fn translate_page_visual(
+pub async fn translate_page_visual(
     translator: &impl Translator,
     page: &mut Page,
     upcoming: Option<&Page>,
@@ -659,7 +668,9 @@ pub fn translate_page_visual(
     add_memory_instructions(&mut system, !request.translation_memory.is_empty());
     let expected = request.regions.iter().map(|region| region.id).collect();
     add_requested_ids(&mut system, &expected, translator.prompt_template());
-    let raw = translator.complete_with_image(&system, &serde_json::to_string(&request)?, jpeg)?;
+    let raw = translator
+        .complete_with_image(&system, &serde_json::to_string(&request)?, jpeg)
+        .await?;
     let response = validate_response(&raw, &expected, context, true, !include_terms)?;
     let conflicts = response.conflicts.clone();
     apply_response(
@@ -682,7 +693,7 @@ pub fn translate_page_visual(
 /// # Errors
 ///
 /// Fails like [`translate_missing_page_with_crops`].
-pub fn translate_missing_page(
+pub async fn translate_missing_page(
     translator: &impl Translator,
     page: &mut Page,
     upcoming: Option<&Page>,
@@ -700,6 +711,7 @@ pub fn translate_missing_page(
         analysis,
         jpeg.map(|jpeg| VisualInput { jpeg, crops: &[] }),
     )
+    .await
 }
 
 /// Fills missing translations using a page image and optional labeled close-ups.
@@ -713,7 +725,7 @@ pub fn translate_missing_page(
 ///
 /// Panics only if a region validated against the page or analysis disappears
 /// between validation and application, which cannot happen.
-pub fn translate_missing_page_with_crops(
+pub async fn translate_missing_page_with_crops(
     translator: &impl Translator,
     page: &mut Page,
     upcoming: Option<&Page>,
@@ -805,8 +817,12 @@ pub fn translate_missing_page_with_crops(
     add_requested_ids(&mut system, &expected, translator.prompt_template());
     let input = serde_json::to_string(&request)?;
     let raw = match jpeg {
-        Some(jpeg) => translator.complete_with_crops(&system, &input, jpeg, crops)?,
-        None => translator.complete(&system, &input)?,
+        Some(jpeg) => {
+            translator
+                .complete_with_crops(&system, &input, jpeg, crops)
+                .await?
+        }
+        None => translator.complete(&system, &input).await?,
     };
     let mut response = validate_response(&raw, &expected, context, jpeg.is_some(), !include_terms)?;
     // All response IDs, annotations and terminology validate before mutation.
@@ -1337,8 +1353,70 @@ fn apply_response(
     }
 }
 #[cfg(test)]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "test transports answer without waiting"
+)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+
+    // The page functions are async; these tests drive them to completion.
+    fn translate_page(
+        translator: &impl Translator,
+        page: &mut Page,
+        upcoming: Option<&Page>,
+        context: &mut Context,
+        target_language: &str,
+    ) -> Result<Vec<TermConflict>, TranslationError> {
+        block_on(super::translate_page(
+            translator,
+            page,
+            upcoming,
+            context,
+            target_language,
+        ))
+    }
+
+    fn translate_page_visual(
+        translator: &impl Translator,
+        page: &mut Page,
+        upcoming: Option<&Page>,
+        context: &mut Context,
+        target_language: &str,
+        analysis: &mut AnalysisMetadata,
+        jpeg: &[u8],
+    ) -> Result<Vec<TermConflict>, TranslationError> {
+        block_on(super::translate_page_visual(
+            translator,
+            page,
+            upcoming,
+            context,
+            target_language,
+            analysis,
+            jpeg,
+        ))
+    }
+
+    fn translate_missing_page(
+        translator: &impl Translator,
+        page: &mut Page,
+        upcoming: Option<&Page>,
+        context: &mut Context,
+        target_language: &str,
+        analysis: Option<&mut AnalysisMetadata>,
+        jpeg: Option<&[u8]>,
+    ) -> Result<Vec<TermConflict>, TranslationError> {
+        block_on(super::translate_missing_page(
+            translator,
+            page,
+            upcoming,
+            context,
+            target_language,
+            analysis,
+            jpeg,
+        ))
+    }
 
     #[test]
     fn exact_source_memory_keeps_recent_distinct_candidates_without_serializing_snapshots() {
@@ -1414,7 +1492,7 @@ mod tests {
     use std::cell::{Cell, RefCell};
     struct Reply<'a>(&'a str);
     impl Translator for Reply<'_> {
-        fn complete(&self, _: &str, input: &str) -> Result<String, TranslationError> {
+        async fn complete(&self, _: &str, input: &str) -> Result<String, TranslationError> {
             assert!(input.contains("upcoming"));
             Ok(self.0.into())
         }
@@ -1789,11 +1867,11 @@ mod tests {
     }
 
     impl Translator for VisualReply {
-        fn complete(&self, _: &str, _: &str) -> Result<String, TranslationError> {
+        async fn complete(&self, _: &str, _: &str) -> Result<String, TranslationError> {
             panic!("visual translation must delegate the image")
         }
 
-        fn complete_with_image(
+        async fn complete_with_image(
             &self,
             system: &str,
             input: &str,
@@ -1825,11 +1903,11 @@ mod tests {
     }
 
     impl Translator for CapturedRequests {
-        fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError> {
+        async fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError> {
             self.record(system, input, false)
         }
 
-        fn complete_with_image(
+        async fn complete_with_image(
             &self,
             system: &str,
             input: &str,
@@ -1859,7 +1937,11 @@ mod tests {
                     "Translate to {{target_language}}. Keep names in original spelling and script. {{visual}} {{style}} {{response_schema}}",
                 )
             }
-            fn complete(&self, system: &str, input: &str) -> Result<String, TranslationError> {
+            async fn complete(
+                &self,
+                system: &str,
+                input: &str,
+            ) -> Result<String, TranslationError> {
                 self.0
                     .borrow_mut()
                     .push((system.into(), serde_json::from_str(input)?));
@@ -1869,13 +1951,13 @@ mod tests {
                     .to_string(),
                 )
             }
-            fn complete_with_image(
+            async fn complete_with_image(
                 &self,
                 system: &str,
                 input: &str,
                 _: &[u8],
             ) -> Result<String, TranslationError> {
-                self.complete(system, input)
+                self.complete(system, input).await
             }
         }
         let service = Deferred::default();
@@ -1960,7 +2042,7 @@ mod tests {
                     "Translate to {{target_language}}. {{context}} {{terminology}} {{response_schema}}",
                 )
             }
-            fn complete(&self, _: &str, input: &str) -> Result<String, TranslationError> {
+            async fn complete(&self, _: &str, input: &str) -> Result<String, TranslationError> {
                 let input: serde_json::Value = serde_json::from_str(input)?;
                 assert_eq!(input["glossary"]["Mark"], "马克");
                 assert!(
@@ -1988,7 +2070,7 @@ mod tests {
             fn prompt_template(&self) -> Option<&str> {
                 Some(self.0)
             }
-            fn complete(&self, _: &str, _: &str) -> Result<String, TranslationError> {
+            async fn complete(&self, _: &str, _: &str) -> Result<String, TranslationError> {
                 Ok(json!({"translations":[{"id":1,"text":"好。"}]}).to_string())
             }
         }

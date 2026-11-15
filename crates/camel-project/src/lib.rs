@@ -1,22 +1,37 @@
-//! Camel project file formats and pure page operations.
+//! Camel project file formats, pure page operations and the pipeline engine.
 //!
 //! A Camel project is a directory of JSON files: `index.json` lists the page
 //! records (`00001.json`, …), `source.json` names the original comic, and an
 //! optional `translation-plan.json` groups pages into scenes. This crate holds
-//! the record types and every operation on them that does not touch the
-//! filesystem, so the command-line tool and the browser workbench change
-//! records in exactly the same way and write byte-identical JSON.
+//! the record types, every operation on them, and the pipeline steps —
+//! analysis, scene planning, translation, audits, checks and export — so the
+//! command-line tool and the browser workbench run exactly the same code and
+//! write byte-identical files. Pipeline steps reach files, the network and
+//! the clock only through a [`host::Host`].
 
+pub mod analyze;
+pub mod audit;
+pub mod check_layout;
 pub mod edit;
+pub mod error;
+pub mod export;
+pub mod host;
 pub mod plan;
+pub mod prepare;
 pub mod record;
+pub mod remote;
 pub mod render;
 pub mod source;
+mod store;
+pub mod terms;
+pub mod translate;
 
+pub use error::Error;
 pub use record::{
     CONTENT_FILTER_ISSUE, FILTER_CONTEXT_ISSUE, Record, TRANSLATION_ISSUE, TranslationConfig,
     is_content_filter_issue,
 };
+pub use remote::Service;
 
 /// Serializes a project file exactly as Camel writes it: compact JSON and a
 /// trailing newline.

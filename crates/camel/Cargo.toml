@@ -20,6 +20,7 @@ thiserror = { workspace = true, features = ["std"] }
 zip = { workspace = true, features = ["deflate-flate2"] }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 tempfile.workspace = true
 
 [lints]

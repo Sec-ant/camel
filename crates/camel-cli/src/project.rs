@@ -1,8 +1,7 @@
 use std::{
-    fs::{self, File},
+    fs::File,
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
 };
 
 use anyhow::{Context as _, Result};
@@ -13,7 +12,6 @@ use tempfile::NamedTempFile;
 
 mod analyze;
 pub use analyze::analyze;
-pub(crate) use analyze::analyze_one;
 mod audit;
 pub use audit::audit;
 mod export;
@@ -31,10 +29,16 @@ pub use repair::{remove_region, repair_region};
 mod review;
 pub use review::{apply_review, export_review};
 mod source;
+pub(crate) use source::{LockedComic, ProjectSource};
 mod terminology;
 pub use terminology::check_terms;
 mod translate;
 pub use translate::{TranslateOptions, translate};
+
+/// Runs a pipeline operation to completion on this thread.
+fn run<T>(operation: impl Future<Output = Result<T, camel_project::Error>>) -> Result<T> {
+    Ok(futures::executor::block_on(operation)?)
+}
 
 fn file_digest(path: &Path) -> Result<String> {
     let mut reader =
@@ -54,27 +58,6 @@ fn file_digest(path: &Path) -> Result<String> {
 pub(crate) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     serde_json::from_reader(BufReader::new(File::open(path)?))
         .with_context(|| format!("read {}", path.display()))
-}
-
-/// A record file's revision: modification time and length, which change
-/// whenever any writer replaces the file through [`write_atomic`].
-pub(crate) fn revision(metadata: &fs::Metadata) -> Result<String> {
-    let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos();
-    Ok(format!("{modified:x}-{:x}", metadata.len()))
-}
-
-/// The current revision of the file at `path`.
-pub(crate) fn revision_of(path: &Path) -> Result<String> {
-    revision(&fs::metadata(path)?)
-}
-
-/// Reads a file and the revision of exactly the bytes read.
-pub(crate) fn load(path: &Path) -> Result<(String, Vec<u8>)> {
-    let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let revision = revision(&file.metadata()?)?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok((revision, bytes))
 }
 
 pub(crate) fn save<T: Serialize>(path: &Path, value: &T, replace: bool) -> Result<()> {
@@ -110,4 +93,14 @@ pub(crate) fn default_font() -> Option<PathBuf> {
     ]
     .into_iter()
     .find(|p| p.is_file())
+}
+
+/// The export font: `font`, else an installed Chinese font, read into memory.
+fn load_font(font: Option<&Path>) -> Result<(PathBuf, Vec<u8>)> {
+    let font = font
+        .map(Path::to_owned)
+        .or_else(default_font)
+        .context("provide a Chinese font with --font or CAMEL_FONT")?;
+    let bytes = std::fs::read(&font).with_context(|| format!("read font {}", font.display()))?;
+    Ok((font, bytes))
 }

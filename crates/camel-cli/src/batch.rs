@@ -1,12 +1,13 @@
 //! Page threads share model weights and coordinate inference parallelism.
 use std::{
-    path::Path,
     sync::Mutex,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     thread,
 };
 
 use anyhow::Result;
+
+use crate::{host::FsHost, project::LockedComic};
 
 pub(crate) fn worker_count(requested: Option<usize>, pages: usize) -> usize {
     requested.unwrap_or(2).max(1).min(pages.max(1))
@@ -15,10 +16,9 @@ pub(crate) fn worker_count(requested: Option<usize>, pages: usize) -> usize {
 pub(crate) fn analyze(
     source: &Mutex<camel::comic::ComicSource>,
     pages: usize,
-    output: &Path,
+    host: &FsHost,
     engine: &camel_vision::Engine,
     jobs: usize,
-    quiet: bool,
     completed: &[bool],
 ) -> Result<()> {
     let next = AtomicUsize::new(0);
@@ -29,6 +29,7 @@ pub(crate) fn analyze(
                 scope.spawn(|| -> Result<()> {
                     let local = (jobs >= 4).then(|| engine.with_threads(1));
                     let engine = local.as_ref().unwrap_or(engine);
+                    let mut comic = LockedComic(source);
                     while !failed.load(Ordering::Relaxed) {
                         let i = next.fetch_add(1, Ordering::Relaxed);
                         if i >= pages {
@@ -37,14 +38,14 @@ pub(crate) fn analyze(
                         if completed[i] {
                             continue;
                         }
-                        let result = crate::project::analyze_one(
-                            source,
-                            output,
-                            i + 1,
-                            pages,
-                            quiet,
-                            engine,
-                        );
+                        let result =
+                            futures::executor::block_on(camel_project::analyze::analyze_page(
+                                host,
+                                engine,
+                                &mut comic,
+                                i + 1,
+                                pages,
+                            ));
                         if result.is_err() {
                             failed.store(true, Ordering::Relaxed);
                         }

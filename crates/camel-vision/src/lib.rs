@@ -84,13 +84,28 @@ impl Detector {
     /// Returns [`Error::Model`] when the file cannot be loaded and [`Error::Output`]
     /// when the model does not have two inputs and three outputs.
     pub fn load(path: &Path, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        let model = Arc::new(Model::load_file(path).map_err(model_error)?);
+        Self::new(Model::load_file(path).map_err(model_error)?, pool)
+    }
+
+    /// Loads a detector model from ONNX or `.rten` bytes already in memory.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Detector::load`].
+    pub fn from_bytes(bytes: Vec<u8>, pool: Arc<ThreadPool>) -> Result<Self, Error> {
+        Self::new(Model::load(bytes).map_err(model_error)?, pool)
+    }
+
+    fn new(model: Model, pool: Arc<ThreadPool>) -> Result<Self, Error> {
         if model.input_ids().len() != 2 || model.output_ids().len() != 3 {
             return Err(Error::Output(
                 "detector needs two inputs and three outputs".into(),
             ));
         }
-        Ok(Self { model, pool })
+        Ok(Self {
+            model: Arc::new(model),
+            pool,
+        })
     }
 
     /// Detects bubbles and text in a decoded RGB page, keeping results scoring at least `threshold`.
@@ -205,7 +220,19 @@ impl Recognizer {
     /// Returns [`Error::Model`] when the file cannot be loaded and [`Error::Output`]
     /// when the model shape is wrong or the `character` metadata is missing.
     pub fn load(path: &Path, pool: Arc<ThreadPool>) -> Result<Self, Error> {
-        let model = Arc::new(Model::load_file(path).map_err(model_error)?);
+        Self::new(Model::load_file(path).map_err(model_error)?, pool)
+    }
+
+    /// Loads a recognizer from ONNX or `.rten` bytes already in memory.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Recognizer::load`].
+    pub fn from_bytes(bytes: Vec<u8>, pool: Arc<ThreadPool>) -> Result<Self, Error> {
+        Self::new(Model::load(bytes).map_err(model_error)?, pool)
+    }
+
+    fn new(model: Model, pool: Arc<ThreadPool>) -> Result<Self, Error> {
         if model.input_ids().len() != 1 || model.output_ids().len() != 1 {
             return Err(Error::Output(
                 "recognizer needs one input and one output".into(),
@@ -219,7 +246,7 @@ impl Recognizer {
         characters.extend(dictionary.lines().map(str::to_owned));
         characters.push(" ".into());
         Ok(Self {
-            model,
+            model: Arc::new(model),
             pool,
             characters: characters.into(),
         })

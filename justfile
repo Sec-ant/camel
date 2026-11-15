@@ -14,10 +14,11 @@ doc:
     cargo doc --workspace --no-deps --locked
 
 # Build the WebAssembly core and its JS bindings into web/src/wasm.
+# SIMD comes from .cargo/config.toml; text recognition needs it.
 wasm:
     cargo build -p camel-web --target wasm32-unknown-unknown --profile web --locked
     wasm-bindgen --target web --out-dir web/src/wasm target/wasm32-unknown-unknown/web/camel_web.wasm
-    wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals web/src/wasm/camel_web_bg.wasm -o web/src/wasm/camel_web_bg.wasm
+    wasm-opt -Oz --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-simd web/src/wasm/camel_web_bg.wasm -o web/src/wasm/camel_web_bg.wasm
 
 # Build the static workbench into web/dist.
 web: wasm
