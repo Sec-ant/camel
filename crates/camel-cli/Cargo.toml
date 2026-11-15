@@ -14,25 +14,26 @@ doc = false
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }
-base64 = { workspace = true, features = ["std"] }
 camel.workspace = true
 camel-project.workspace = true
 camel-vision.workspace = true
 clap = { workspace = true, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "env"] }
+futures = { workspace = true, features = ["std", "executor"] }
 image = { workspace = true, features = ["png", "jpeg"] }
 mimalloc.workspace = true
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 tempfile.workspace = true
-ureq = { workspace = true, features = ["rustls", "json"] }
-zip = { workspace = true, features = ["deflate-flate2"] }
+ureq = { workspace = true, features = ["rustls"] }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 rustix = { workspace = true, features = ["std", "fs"] }
 
 [dev-dependencies]
+base64 = { workspace = true, features = ["std"] }
 tiny_http.workspace = true
+zip = { workspace = true, features = ["deflate-flate2"] }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 mod batch;
 mod config;
+mod host;
 mod project;
-mod remote;
 
 use std::{
     io::{self, Write},
@@ -201,6 +201,38 @@ struct Service {
     prompt: Option<PathBuf>,
     request_options: std::collections::BTreeMap<String, serde_json::Value>,
     variables: std::collections::BTreeMap<String, String>,
+}
+
+impl Service {
+    /// The pipeline's service settings with a prompt template or audit
+    /// policy. The API key is read now but reported missing only when a
+    /// request is needed.
+    fn settings(&self, prompt: Option<String>) -> camel_project::Service {
+        camel_project::Service {
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            fallback_model: self.fallback_model.clone(),
+            target_language: self.target_language.clone(),
+            text_only: self.text_only,
+            prompt,
+            request_options: self.request_options.clone(),
+            variables: self.variables.clone(),
+            api_key: self.api_key(),
+        }
+    }
+
+    fn api_key(&self) -> Result<String, String> {
+        if let Ok(value) = std::env::var("CAMEL_API_KEY") {
+            return Ok(value);
+        }
+        let path = self
+            .api_key_file
+            .clone()
+            .or_else(|| config::config_dir().map(|path| path.join("api-key")))
+            .ok_or("set CAMEL_API_KEY or --api-key-file")?;
+        std::fs::read_to_string(&path)
+            .map_err(|error| format!("read API key from {}: {error}", path.display()))
+    }
 }
 
 impl ServiceArgs {

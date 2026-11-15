@@ -1,6 +1,6 @@
 [package]
 name = "camel-project"
-description = "Camel project file formats and pure page operations shared by the CLI and the web workbench"
+description = "Camel project formats and the comic translation pipeline shared by the CLI and the web workbench"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,12 +8,19 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64 = { workspace = true, features = ["std"] }
 camel.workspace = true
-image.workspace = true
+camel-vision.workspace = true
+futures = { workspace = true, features = ["std", "async-await"] }
+image = { workspace = true, features = ["png", "jpeg"] }
 serde = { workspace = true, features = ["std", "derive"] }
 serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 thiserror = { workspace = true, features = ["std"] }
+zip.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 
 [lints]
 workspace = true

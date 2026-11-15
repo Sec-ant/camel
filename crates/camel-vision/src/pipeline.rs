@@ -98,6 +98,24 @@ impl Engine {
         })
     }
 
+    /// Builds an engine from `detector.onnx` and `recognizer.onnx` bytes already in
+    /// memory, for hosts without a filesystem such as WebAssembly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Model`] or [`Error::Output`] when either model is invalid.
+    pub fn from_bytes(
+        detector: Vec<u8>,
+        recognizer: Vec<u8>,
+        threads: usize,
+    ) -> Result<Self, Error> {
+        let pool = Arc::new(ThreadPool::with_num_threads(threads.max(1)));
+        Ok(Self {
+            detector: Detector::from_bytes(detector, Arc::clone(&pool))?,
+            recognizer: Recognizer::from_bytes(recognizer, pool)?,
+        })
+    }
+
     /// Reuse loaded weights with a separate inference thread pool.
     #[must_use]
     pub fn with_threads(&self, threads: usize) -> Self {
