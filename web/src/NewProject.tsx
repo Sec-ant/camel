@@ -4,7 +4,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { call } from "./engine.ts";
 import { JobView } from "./JobView.tsx";
-import { Slot, type Check, comicName, errorMessage } from "./OpenScreen.tsx";
+import { Slot, type Check, comicName, errorMessage, replaceComic } from "./OpenScreen.tsx";
 import { currentJob, defaultWorkers, jobRunning, jobVersion, runAnalysis } from "./pipeline/jobs.ts";
 import { Session } from "./session.ts";
 import { start } from "./state.ts";
@@ -51,7 +51,7 @@ function megabytes(bytes: number): string {
 
 export function NewProject() {
   void jobVersion.value;
-  const [comic, setComic] = useState<{ choice: ComicChoice; pages: string[] } | null>(null);
+  const [comic, setComic] = useState<{ choice: ComicChoice; id: number; pages: string[] } | null>(null);
   const [comicCheck, setComicCheck] = useState<Check>({ state: "idle" });
   const [output, setOutput] = useState<Output | null>(null);
   const [name, setName] = useState("");
@@ -84,11 +84,14 @@ export function NewProject() {
   const loadComic = async (choice: ComicChoice): Promise<void> => {
     setComicCheck({ state: "checking" });
     try {
-      const { pages } = await call("openComic", { comic: choice.comic });
-      if (pages.length === 0) throw new Error("it has no PNG or JPEG pages");
-      setComic({ choice, pages });
+      const opened = await replaceComic(comic, choice);
+      if (opened.pages.length === 0) {
+        void call("closeComic", { id: opened.id });
+        throw new Error("it has no PNG or JPEG pages");
+      }
+      setComic({ choice, ...opened });
       setComicCheck({ state: "ok" });
-      if (!name) setName(comicName(choice).replace(/\.[^.]+$|\/$/, ""));
+      setName((current) => current || comicName(choice).replace(/\.[^.]+$|\/$/, ""));
     } catch (error) {
       setComic(null);
       setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${errorMessage(error)}` });
@@ -116,6 +119,7 @@ export function NewProject() {
     const finished = await runAnalysis({
       store,
       comic: comic.choice.comic,
+      comicId: comic.id,
       comicPages: comic.pages,
       models,
       workers,
@@ -130,7 +134,7 @@ export function NewProject() {
       const files = new ProjectFiles(store);
       const session = await Session.open({
         files,
-        comic: { files: comic.choice.comic, pages: comic.pages },
+        comic: { id: comic.id, files: comic.choice.comic, pages: comic.pages },
         font,
         onProgress: (done, total) => setOpening({ done, total }),
       });

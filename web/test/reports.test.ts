@@ -45,6 +45,7 @@ test("a term left in the source language is replaced by its confirmed translatio
   assert.equal(replaceRetainedTerm("全能侠", "Omni-Man", "全能侠"), null);
   assert.equal(replaceRetainedTerm("a.b", "a.b", "x"), "x");
   assert.equal(replaceRetainedTerm("axb", "a.b", "x"), null);
+  assert.equal(replaceRetainedTerm("Mark!", "Mark", "$&-$1"), "$&-$1!");
 });
 
 test("check-terms issues suggest a fix only when the source term is still there", () => {

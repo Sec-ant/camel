@@ -132,6 +132,7 @@ export type PipelineRequests = {
       readonly job: JobSpec;
       readonly store: StoreDescriptor;
       readonly comic: ComicFiles | null;
+      readonly comicId: number | null;
       readonly font: ArrayBuffer | null;
     };
     result: OperationResult;
@@ -143,6 +144,7 @@ export type PipelineRequests = {
     request: {
       readonly store: StoreDescriptor;
       readonly comic: ComicFiles;
+      readonly comicId: number;
       readonly options: Omit<BeginAnalysisOptions, "build">;
     };
     result: boolean[];

@@ -15,8 +15,14 @@ export interface RecordSummary {
   readonly plan_key: unknown;
 }
 
+/**
+ * Each comic opened in the worker gets an id; page requests name the comic they read, so the
+ * open screen, the new-project screen, a session and an analysis never read each other's.
+ */
 export type Requests = {
-  openComic: { request: { comic: ComicFiles }; result: { pages: string[] } };
+  openComic: { request: { id: number; comic: ComicFiles }; result: { id: number; pages: string[] } };
+  /** Releases a comic opened with `openComic`. */
+  closeComic: { request: { id: number }; result: null };
   setFont: { request: { font: ArrayBuffer; glossary: string | null }; result: null };
   summarize: {
     request: { records: string[] };
@@ -24,19 +30,19 @@ export type Requests = {
   };
   document: { request: { record: string }; result: string };
   /** Verified original page bytes (a copy). */
-  image: { request: { reference: string }; result: ArrayBuffer };
-  prefetch: { request: { reference: string }; result: null };
+  image: { request: { comic: number; reference: string }; result: ArrayBuffer };
+  prefetch: { request: { comic: number; reference: string }; result: null };
   preview: {
-    request: { reference: string; record: string; key: string };
+    request: { comic: number; reference: string; record: string; key: string };
     result: { json: string; images: ArrayBuffer[] };
   };
-  apply: { request: { reference: string; record: string; edits: string }; result: string };
+  apply: { request: { comic: number; reference: string; record: string; edits: string }; result: string };
   repairPlan: {
     request: { plan: string; index: string; previous: string; keys: string; position: number };
     result: string;
   };
   /** Raw bytes of comic page `index` (unverified: analysis has no reference yet). */
-  pageBytes: { request: { index: number }; result: ArrayBuffer };
+  pageBytes: { request: { comic: number; index: number }; result: ArrayBuffer };
 };
 
 /** Comic page index encoded in a record's source reference "@index:sha256". */

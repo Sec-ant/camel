@@ -80,7 +80,8 @@ function escapePattern(text: string): string {
 export function replaceRetainedTerm(translation: string, term: string, expected: string): string | null {
   const pattern = new RegExp(escapePattern(term), "giu");
   if (!pattern.test(translation)) return null;
-  return translation.replace(pattern, expected);
+  // A function replacement inserts `expected` literally ("$&" or "$1" are not patterns).
+  return translation.replace(pattern, () => expected);
 }
 
 export function termItems(json: string): ReviewItem[] {

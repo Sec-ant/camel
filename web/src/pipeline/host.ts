@@ -69,16 +69,16 @@ export function createHost(
       }
     },
     sleep(ms) {
+      const { signal } = cancellation;
+      if (signal.aborted) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
-      const timer = setTimeout(resolve, ms);
-      cancellation.signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true },
-      );
+      const wake = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", wake);
+        resolve();
+      };
+      const timer = setTimeout(wake, ms);
+      signal.addEventListener("abort", wake);
       return promise;
     },
     report(event) {

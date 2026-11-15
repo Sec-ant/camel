@@ -37,7 +37,8 @@ interface PageState {
 
 export interface OpenOptions {
   readonly files: ProjectFiles;
-  readonly comic: { readonly files: ComicFiles; readonly pages: readonly string[] } | null;
+  /** `id`: the comic opened in the page-engine worker (`openComic`); the session reads only it. */
+  readonly comic: { readonly id: number; readonly files: ComicFiles; readonly pages: readonly string[] } | null;
   readonly font: FontData;
   readonly onProgress: (done: number, total: number) => void;
 }
@@ -83,13 +84,16 @@ export class Session {
   readonly #index: readonly string[];
   readonly #pages: PageState[];
   readonly #comicPages: readonly string[] | null;
+  /** Stable page-engine identity, also used by pipeline source caches. */
+  readonly comicId: number | null;
   readonly #source: string;
   #plan: StoredText | null;
   #project: Project | null = null;
   readonly #records = new Map<number, StoredText>();
   readonly #undo = new Map<number, string[]>();
   readonly #redo = new Map<number, string[]>();
-  readonly #images = new Map<number, string>();
+  /** Object URLs of original pages, most recently used last; shared by concurrent requests. */
+  readonly #images = new Map<number, Promise<string>>();
   #previewUrls: string[] = [];
 
   private constructor(
@@ -107,6 +111,7 @@ export class Session {
     this.#index = index;
     this.#pages = pages;
     this.#comicPages = options.comic?.pages ?? null;
+    this.comicId = options.comic?.id ?? null;
     this.#source = source;
     this.#plan = plan;
   }
@@ -200,10 +205,12 @@ export class Session {
     }
     for (const index of changed) {
       const record = await this.files.read(this.#index[index]!);
-      if (!record) continue;
+      // A write of our own may have landed between reading the revision and comparing it.
+      if (!record || record.revision === this.#pages[index]!.revision) continue;
       const [state] = await call("summarize", { records: [record.text] });
       this.#pages[index] = { ...state!, revision: record.revision };
       this.#records.delete(index);
+      this.#forgetHistory(index);
     }
     if (changed.length > 0) this.#project = null;
     return this.project();
@@ -218,11 +225,18 @@ export class Session {
       const [state] = await call("summarize", { records: [record.text] });
       this.#pages[index] = { ...state!, revision: record.revision };
       this.#project = null;
+      this.#forgetHistory(index);
     }
     this.#records.set(index, record);
     // Keep the open page and its neighbours only.
     for (const key of this.#records.keys()) if (Math.abs(key - index) > 2) this.#records.delete(key);
     return record;
+  }
+
+  /** Undo/redo would write text over a change made elsewhere; drop the page's history. */
+  #forgetHistory(index: number): void {
+    this.#undo.delete(index);
+    this.#redo.delete(index);
   }
 
   #reference(index: number): string {
@@ -247,18 +261,32 @@ export class Session {
     };
   }
 
+  /** The comic's id, or a user-facing error when the session has no comic. */
+  #comic(purpose: string): number {
+    if (this.comicId === null) throw new Error(`Choose the comic to ${purpose}`);
+    return this.comicId;
+  }
+
   /** Object URL of the verified original page, or null when no comic was chosen. */
   async pageImage(index: number): Promise<string | null> {
-    if (!this.#comicPages) return null;
-    const cached = this.#images.get(index);
-    if (cached) return cached;
-    const bytes = await call("image", { reference: this.#reference(index) });
-    const url = URL.createObjectURL(new Blob([bytes], { type: sniff(bytes) }));
+    if (this.comicId === null) return null;
+    let url = this.#images.get(index);
+    if (url) {
+      this.#images.delete(index);
+    } else {
+      const loading = call("image", { comic: this.comicId, reference: this.#reference(index) }).then((bytes) =>
+        URL.createObjectURL(new Blob([bytes], { type: sniff(bytes) })),
+      );
+      loading.catch(() => {
+        if (this.#images.get(index) === loading) this.#images.delete(index);
+      });
+      url = loading;
+    }
     this.#images.set(index, url);
     if (this.#images.size > IMAGE_URLS) {
       const [oldest, stale] = this.#images.entries().next().value!;
       this.#images.delete(oldest);
-      URL.revokeObjectURL(stale);
+      stale.then(URL.revokeObjectURL, () => undefined);
     }
     return url;
   }
@@ -266,13 +294,17 @@ export class Session {
   /** Warms the worker's page cache (the comic may be on a slow network share). */
   prefetch(index: number): void {
     const reference = this.#pages[index]?.reference;
-    if (this.#comicPages && reference) void call("prefetch", { reference }).catch(() => undefined);
+    // A failed prefetch is reported when that page is opened.
+    if (this.comicId !== null && reference) {
+      void call("prefetch", { comic: this.comicId, reference }).catch(() => undefined);
+    }
   }
 
   async preview(index: number): Promise<Preview> {
-    if (!this.#comicPages) throw new Error("Choose the comic to render previews");
+    const comic = this.#comic("render previews");
     const record = await this.#record(index);
     const rendered = await call("preview", {
+      comic,
       reference: this.#reference(index),
       record: record.text,
       key: record.revision,
@@ -341,7 +373,12 @@ export class Session {
   async edits(index: number, revision: string, edits: readonly Edit[]): Promise<EditResult> {
     const current = await this.#current(index, revision);
     const applied = JSON.parse(
-      await call("apply", { reference: this.#reference(index), record: current.text, edits: JSON.stringify(edits) }),
+      await call("apply", {
+        comic: this.#comic("edit pages"),
+        reference: this.#reference(index),
+        record: current.text,
+        edits: JSON.stringify(edits),
+      }),
     ) as { record: string; created: number[] };
     const warning = await this.#commit(index, applied.record, current.revision);
     const undo = this.#stack(this.#undo, index);
@@ -353,10 +390,11 @@ export class Session {
 
   async #restore(index: number, revision: string, from: Map<number, string[]>, to: Map<number, string[]>): Promise<EditResult> {
     const current = await this.#current(index, revision);
-    const stack = from.get(index);
-    const text = stack?.pop();
+    // Popped only once the write succeeded, so a failed write keeps the entry.
+    const text = from.get(index)?.at(-1);
     if (text === undefined) throw new Error(from === this.#undo ? "Nothing to undo" : "Nothing to redo");
     const warning = await this.#commit(index, text, current.revision);
+    from.get(index)?.pop();
     this.#stack(to, index).push(current.text);
     return { page: await this.page(index), created: [], warning };
   }

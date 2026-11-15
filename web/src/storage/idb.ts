@@ -16,36 +16,64 @@ function settle<T>(request: IDBRequest<T>, failure: string): Promise<T> {
   return promise;
 }
 
+/** Opens the database once; a failed open is retried by the next request. */
 function database(): Promise<IDBDatabase> {
   if (!opening) {
     const request = indexedDB.open(DATABASE, 1);
     request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    opening = settle(request, "IndexedDB is unavailable");
+    const opened = settle(request, "IndexedDB is unavailable").then((db) => {
+      // Another tab upgrading the database, or the browser closing it, ends this connection.
+      const forget = (): void => {
+        if (opening === opened) opening = null;
+      };
+      db.onversionchange = () => {
+        db.close();
+        forget();
+      };
+      db.onclose = forget;
+      return db;
+    });
+    opening = opened;
+    opened.catch(() => {
+      if (opening === opened) opening = null;
+    });
   }
   return opening;
 }
 
-async function run<T>(mode: IDBTransactionMode, body: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function read<T>(body: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   const db = await database();
-  return settle(body(db.transaction(STORE, mode).objectStore(STORE)), "IndexedDB request failed");
+  return settle(body(db.transaction(STORE, "readonly").objectStore(STORE)), "IndexedDB request failed");
+}
+
+/** Resolves once the write has been committed: a quota error or abort surfaces at commit. */
+async function write(body: (store: IDBObjectStore) => void): Promise<void> {
+  const db = await database();
+  const transaction = db.transaction(STORE, "readwrite");
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  transaction.oncomplete = () => resolve();
+  transaction.onerror = transaction.onabort = () =>
+    reject(transaction.error ?? new Error("IndexedDB write was not saved"));
+  body(transaction.objectStore(STORE));
+  return promise;
 }
 
 export function idbGet<T>(key: string): Promise<T | undefined> {
-  return run("readonly", (store) => store.get(key) as IDBRequest<T | undefined>);
+  return read((store) => store.get(key) as IDBRequest<T | undefined>);
 }
 
-export async function idbSet(key: string, value: unknown): Promise<void> {
-  await run("readwrite", (store) => store.put(value, key));
+export function idbSet(key: string, value: unknown): Promise<void> {
+  return write((store) => store.put(value, key));
 }
 
-export async function idbDelete(key: string): Promise<void> {
-  await run("readwrite", (store) => store.delete(key));
+function idbDelete(key: string): Promise<void> {
+  return write((store) => store.delete(key));
 }
 
 /** Keys starting with `prefix`. */
-export async function idbKeys(prefix: string): Promise<string[]> {
+async function idbKeys(prefix: string): Promise<string[]> {
   const range = IDBKeyRange.bound(prefix, `${prefix}\uffff`);
-  const keys = await run("readonly", (store) => store.getAllKeys(range));
+  const keys = await read((store) => store.getAllKeys(range));
   return keys.map(String);
 }
 

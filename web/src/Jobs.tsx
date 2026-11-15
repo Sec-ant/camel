@@ -7,6 +7,7 @@ import { JobView } from "./JobView.tsx";
 import { errorMessage } from "./OpenScreen.tsx";
 import { currentJob, jobRunning, jobVersion, runOperation } from "./pipeline/jobs.ts";
 import type { JobSpec, OperationKind } from "./pipeline/protocol.ts";
+import { onRadioGroupKey } from "./radio.ts";
 import { reportPath } from "./reports.ts";
 import { type ServiceOptions, type Settings, loadSettings, serviceOptions } from "./settings.ts";
 import { activeSession, announce, openPage, project, reviewItems, reviewSources, view } from "./state.ts";
@@ -185,7 +186,7 @@ export function JobsScreen() {
               ? "Translation service not configured."
               : `${service.model} · ${service.base_url}${service.text_only ? " · text only" : ""}`}
         </p>
-        <div class="rows" role="radiogroup" aria-label="Operation">
+        <div class="rows" role="radiogroup" aria-label="Operation" onKeyDown={onRadioGroupKey}>
           {OPERATIONS.map((item) => (
             <button
               key={item.id}
@@ -193,6 +194,7 @@ export function JobsScreen() {
               role="radio"
               class="row"
               aria-checked={item.id === operation.id}
+              tabIndex={item.id === operation.id ? 0 : -1}
               onClick={() => (selected.value = item.id)}
             >
               <span>{item.title}</span>
@@ -239,7 +241,7 @@ function EmptyJob() {
 
 function Options({ operation, jobs }: { operation: OperationKind; jobs: number }) {
   const jobsField = (
-    <label class="form-row">
+    <label class="property">
       <span>Jobs</span>
       <input
         class="number mono"

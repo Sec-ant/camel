@@ -14,8 +14,13 @@ export interface RequestMessage {
 export type ResponseMessage =
   | { readonly id: number; readonly kind: "ok"; readonly result: unknown }
   | { readonly id: number; readonly kind: "error"; readonly error: string }
+  | { readonly id: number; readonly kind: "fatal"; readonly error: string }
   | { readonly id: number; readonly kind: "event"; readonly event: unknown };
 
+/**
+ * Main-thread side of a worker. A worker error, an undecodable message or `terminate` ends the
+ * client: pending and later calls reject with that error (create a new client to continue).
+ */
 export class WorkerClient<Requests extends RequestMap, Event = never> {
   readonly #worker: Worker;
   readonly #pending = new Map<
@@ -23,11 +28,16 @@ export class WorkerClient<Requests extends RequestMap, Event = never> {
     { resolve(value: unknown): void; reject(error: Error): void; onEvent?: ((event: Event) => void) | undefined }
   >();
   #nextId = 1;
+  #failure: Error | null = null;
 
   constructor(url: URL, description: string) {
     this.#worker = new Worker(url, { type: "module" });
     this.#worker.onmessage = (event: MessageEvent<ResponseMessage>) => {
       const message = event.data;
+      if (message.kind === "fatal") {
+        this.#fail(new Error(message.error));
+        return;
+      }
       const waiter = this.#pending.get(message.id);
       if (!waiter) return;
       if (message.kind === "event") {
@@ -39,10 +49,16 @@ export class WorkerClient<Requests extends RequestMap, Event = never> {
       else waiter.reject(new Error(message.error));
     };
     this.#worker.onerror = (event) => {
-      const error = new Error(`The ${description} failed to start: ${event.message || "worker error"}`);
-      for (const waiter of this.#pending.values()) waiter.reject(error);
-      this.#pending.clear();
+      this.#fail(new Error(`The ${description} stopped: ${event.message || "worker error"}`));
     };
+    this.#worker.onmessageerror = () => {
+      this.#fail(new Error(`The ${description} sent a message that could not be read`));
+    };
+  }
+
+  /** The error that ended this client, or null while it works. */
+  get failure(): Error | null {
+    return this.#failure;
   }
 
   call<T extends keyof Requests & string>(
@@ -51,6 +67,7 @@ export class WorkerClient<Requests extends RequestMap, Event = never> {
     transfer: Transferable[] = [],
     onEvent?: (event: Event) => void,
   ): Promise<Requests[T]["result"]> {
+    if (this.#failure) return Promise.reject(this.#failure);
     const { promise, resolve, reject } = Promise.withResolvers<Requests[T]["result"]>();
     const id = this.#nextId++;
     this.#pending.set(id, { resolve: resolve as (value: unknown) => void, reject, onEvent });
@@ -59,8 +76,13 @@ export class WorkerClient<Requests extends RequestMap, Event = never> {
   }
 
   terminate(): void {
+    this.#fail(new Error("The worker was stopped"));
+  }
+
+  #fail(error: Error): void {
+    if (this.#failure) return;
+    this.#failure = error;
     this.#worker.terminate();
-    const error = new Error("The worker was stopped");
     for (const waiter of this.#pending.values()) waiter.reject(error);
     this.#pending.clear();
   }
@@ -85,14 +107,22 @@ export function serve<Requests extends RequestMap, Event = never>(
     onmessage: ((event: MessageEvent<RequestMessage>) => void) | null;
     postMessage(message: ResponseMessage, transfer?: Transferable[]): void;
   };
+  let failure: string | null = null;
   scope.onmessage = (event) => {
     const { id, type, payload } = event.data;
     const emit = (item: Event): void => scope.postMessage({ id, kind: "event", event: item });
     ready
-      .then(() => handlers[type]!(payload as never, emit))
+      .then(() => {
+        if (failure !== null) throw new Error(failure);
+        return handlers[type]!(payload as never, emit);
+      })
       .then(([result, transfer]) => scope.postMessage({ id, kind: "ok", result }, transfer ?? []))
       .catch((error: unknown) => {
-        scope.postMessage({ id, kind: "error", error: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.startsWith("camel-web panicked:") || error instanceof WebAssembly.RuntimeError) {
+          failure = message;
+        }
+        scope.postMessage({ id, kind: failure === null ? "error" : "fatal", error: failure ?? message });
       });
   };
 }

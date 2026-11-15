@@ -134,15 +134,20 @@ kbd {
   grid-area: title;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 0 12px;
   background: var(--ink);
   color: var(--paper);
 }
 
 .titlebar h1 {
+  overflow: hidden;
+  min-width: 0;
   font-size: 14px;
   font-weight: 700;
   line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .title-project {
@@ -153,6 +158,8 @@ kbd {
 
 .title-links {
   display: flex;
+  flex: none;
+  align-items: center;
   gap: 16px;
 }
 
@@ -164,6 +171,7 @@ kbd {
   font-size: 12px;
   text-decoration: underline;
   text-underline-offset: 3px;
+  white-space: nowrap;
 }
 
 .title-link:focus-visible {
@@ -253,6 +261,42 @@ kbd {
 @media (max-width: 1279px) {
   .source-name {
     display: none;
+  }
+
+  .app:not([data-screen]) {
+    grid-template-rows: 36px auto minmax(0, 1fr);
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-block: 6px;
+  }
+
+  .toolbar > .readouts {
+    flex-basis: 100%;
+  }
+
+  .toolbar > .buttons {
+    flex-wrap: wrap;
+  }
+}
+
+.tag-short {
+  display: none;
+}
+
+@media (max-width: 1439px) {
+  .tag-long {
+    position: absolute;
+    overflow: hidden;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+  }
+
+  .tag-short {
+    display: inline;
   }
 }
 
@@ -545,8 +589,9 @@ textarea.source {
 }
 
 .panel-head h3 {
-  font-size: 12px;
-  font-weight: 700;
+  font: 700 11px / 16px var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .field {
@@ -597,10 +642,15 @@ textarea.source {
   border-top: 1px solid var(--ink);
 }
 
+/* Floated legends leave the border and become ordinary flex items, so every
+   group heading sits inside the padding, aligned with its fields. */
 .group legend {
-  padding: 0 4px;
-  font-size: 12px;
-  font-weight: 700;
+  float: left;
+  width: 100%;
+  padding: 0;
+  font: 700 11px / 16px var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .alert {
@@ -681,6 +731,10 @@ textarea.source {
   border-bottom: 1px solid var(--ink);
   color: var(--dim);
   font-size: 11px;
+}
+
+.legend span {
+  white-space: nowrap;
 }
 
 .page-scroll {
@@ -1004,7 +1058,8 @@ textarea.source {
 .candidates li {
   display: grid;
   align-items: center;
-  padding: 6px 0;
+  margin: 0 -4px;
+  padding: 6px 4px;
   border-bottom: 1px solid var(--faint);
   column-gap: 8px;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1021,13 +1076,11 @@ textarea.source {
 
 .candidate-text {
   overflow: hidden;
-  padding-left: 4px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .candidates .helper {
-  padding-left: 4px;
   grid-column: 1 / -1;
 }
 
@@ -1227,10 +1280,6 @@ kbd + kbd {
 
 /* ---------- Title bar navigation ---------- */
 
-.title-links {
-  align-items: center;
-}
-
 .title-nav {
   display: flex;
   gap: 4px;
@@ -1321,6 +1370,13 @@ kbd + kbd {
 .text-input:focus {
   outline: 1px solid var(--ink);
   outline-offset: 0;
+}
+
+.text-input:disabled,
+textarea:disabled,
+select:disabled {
+  border-color: var(--faint);
+  color: var(--dim);
 }
 
 .text-input::placeholder,
@@ -1522,14 +1578,6 @@ textarea.prompt {
     linear-gradient(45deg, transparent 42%, var(--ink) 42% 58%, transparent 58%),
     linear-gradient(-45deg, transparent 42%, var(--ink) 42% 58%, transparent 58%),
     var(--paper);
-}
-
-.page-map[data-clickable] .cell {
-  cursor: pointer;
-}
-
-.page-map[data-clickable] .cell:hover {
-  outline: 1px solid var(--ink);
 }
 
 .legend-row {

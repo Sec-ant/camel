@@ -7,9 +7,8 @@ import { signal } from "@preact/signals";
 import { call } from "../engine.ts";
 import { WorkerClient } from "../rpc.ts";
 import { activeSession, syncProject } from "../state.ts";
-import { type ComicFiles, type ModelFiles, directoryEntries, download } from "../storage/files.ts";
+import { type ComicFiles, type ModelFiles, discardExport, downloadExport } from "../storage/files.ts";
 import type { ProjectStore } from "../storage/store.ts";
-import { zipBlob } from "../storage/zip.ts";
 import { type LogLine, Progress, describeEvent } from "./progress.ts";
 import type {
   AnalyzerRequests,
@@ -119,7 +118,9 @@ function settle(job: Job, outcome: { result: OperationResult } | { error: unknow
 let pipeline: WorkerClient<PipelineRequests, PipelineEvent> | null = null;
 let stopAnalysis: (() => void) | null = null;
 
+/** The pipeline worker; replaced after it failed, so the next run gets a working one. */
 function pipelineWorker(): WorkerClient<PipelineRequests, PipelineEvent> {
+  if (pipeline?.failure) pipeline = null;
   pipeline ??= new WorkerClient(new URL("./pipeline-worker.js", import.meta.url), "pipeline worker");
   return pipeline;
 }
@@ -134,7 +135,7 @@ export async function runOperation(spec: JobSpec, title: string): Promise<void> 
   try {
     const result = await pipelineWorker().call(
       "run",
-      { job: spec, store: session.files.store.descriptor, comic: session.comic, font },
+      { job: spec, store: session.files.store.descriptor, comic: session.comic, comicId: session.comicId, font },
       [font],
       (event) => {
         record(job, event);
@@ -145,22 +146,25 @@ export async function runOperation(spec: JobSpec, title: string): Promise<void> 
         }
       },
     );
-    if (spec.kind === "export" && spec.target.download) {
-      const { handle } = spec.target;
-      if (handle.kind === "file") download(await handle.getFile(), handle.name);
-      else download(await zipBlob(await directoryEntries(handle)), `${handle.name}.zip`);
-    }
+    if (spec.kind === "export" && spec.target.download) await downloadExport(spec.target);
     settle(job, { result });
   } catch (error) {
     settle(job, { error });
+    if (spec.kind === "export" && spec.target.download) {
+      await discardExport(spec.target).catch((cleanup: unknown) => {
+        log(job, { time: Date.now(), tone: "warning", page: null, text: `The partial export was not removed: ${message(cleanup)}` });
+        touch();
+      });
+    }
   }
   await syncProject();
 }
 
 export interface AnalysisInput {
   readonly store: ProjectStore;
-  /** Opened in the page-engine worker (`openComic`) before the run. */
   readonly comic: ComicFiles;
+  /** The same comic opened in the page-engine worker (`openComic`); pages are read from it. */
+  readonly comicId: number;
   readonly comicPages: readonly string[];
   readonly models: ModelFiles;
   readonly workers: number;
@@ -206,6 +210,7 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
       {
         store: store.descriptor,
         comic: input.comic,
+        comicId: input.comicId,
         options: { source: sourceInfo(input.comic), pages: total, detector_sha256, recognizer_sha256 },
       },
       [],
@@ -222,10 +227,14 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
       ),
     );
     let failure: unknown = null;
-    // Each worker reads its next page while recognizing the current one.
+    // Each worker reads its next page while recognizing the current one. A page read ahead is
+    // dropped when the run stops; its failure is then of no interest.
     const take = (): { index: number; bytes: Promise<ArrayBuffer> } | null => {
       const index = queue.shift();
-      return index === undefined ? null : { index, bytes: call("pageBytes", { index }) };
+      if (index === undefined) return null;
+      const bytes = call("pageBytes", { comic: input.comicId, index });
+      bytes.catch(() => undefined);
+      return { index, bytes };
     };
     await Promise.all(
       clients.map(async (client) => {

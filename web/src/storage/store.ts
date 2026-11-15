@@ -77,7 +77,7 @@ export function checkMode(path: string, mode: WriteMode, current: string | null)
   }
 }
 
-export function revisionOf(file: File): string {
+function revisionOf(file: File): string {
   return `${file.lastModified}-${file.size}`;
 }
 
@@ -92,34 +92,27 @@ function ioError(path: string, error: unknown): HostError {
 }
 
 /**
- * Appends to one file one after another: each is a read-modify-write, and concurrent scenes
- * append to translation-metrics.jsonl at the same time.
+ * Runs `task` holding the Web Lock of one file of a store. Locks are shared by the page and
+ * every worker of the origin and granted in request order, so compare-and-swap writes and
+ * read-modify-write appends (concurrent scenes append to translation-metrics.jsonl) to one
+ * file never interleave. Both tiers' browsers provide Web Locks, in workers too. Writes made
+ * outside the browser (camel translate on the folder) take no lock.
  */
-class AppendQueue {
-  readonly #tails = new Map<string, Promise<void>>();
-
-  run(path: string, task: () => Promise<void>): Promise<void> {
-    const next = (this.#tails.get(path) ?? Promise.resolve()).catch(() => undefined).then(task);
-    this.#tails.set(path, next);
-    void next
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.#tails.get(path) === next) this.#tails.delete(path);
-      });
-    return next;
-  }
+function exclusive<T>(store: string, path: string, task: () => Promise<T>): Promise<T> {
+  return navigator.locks.request(`camel:${store}/${path}`, task);
 }
 
 export class DirectoryStore implements ProjectStore {
   readonly name: string;
   readonly descriptor: StoreDescriptor;
   readonly #root: FileSystemDirectoryHandle;
-  readonly #appends = new AppendQueue();
+  readonly #lock: string;
 
   constructor(root: FileSystemDirectoryHandle) {
     this.#root = root;
     this.name = root.name;
     this.descriptor = { kind: "directory", handle: root };
+    this.#lock = `folder:${root.name}`;
   }
 
   async #directory(directories: readonly string[], create: boolean): Promise<FileSystemDirectoryHandle | null> {
@@ -169,21 +162,30 @@ export class DirectoryStore implements ProjectStore {
     return directory.getFileHandle(name, { create: true });
   }
 
-  async write(path: string, bytes: Uint8Array, mode: WriteMode): Promise<string> {
-    checkMode(path, mode, await this.revision(path));
-    try {
-      const handle = await this.#handle(path);
-      const stream = await handle.createWritable();
-      await stream.write(bytes as Uint8Array<ArrayBuffer>);
-      await stream.close();
-      return revisionOf(await handle.getFile());
-    } catch (error) {
-      throw ioError(path, error);
-    }
+  write(path: string, bytes: Uint8Array, mode: WriteMode): Promise<string> {
+    return exclusive(this.#lock, path, async () => {
+      const current = await this.revision(path);
+      checkMode(path, mode, current);
+      try {
+        const handle = await this.#handle(path);
+        try {
+          const stream = await handle.createWritable();
+          await stream.write(bytes as Uint8Array<ArrayBuffer>);
+          await stream.close();
+        } catch (error) {
+          // #handle created the file if it was missing; an empty one would block create_new.
+          if (current === null) await this.#remove(path).catch(() => undefined);
+          throw error;
+        }
+        return revisionOf(await handle.getFile());
+      } catch (error) {
+        throw ioError(path, error);
+      }
+    });
   }
 
   append(path: string, bytes: Uint8Array): Promise<void> {
-    return this.#appends.run(path, async () => {
+    return exclusive(this.#lock, path, async () => {
       try {
         const handle = await this.#handle(path);
         const size = (await handle.getFile()).size;
@@ -197,7 +199,11 @@ export class DirectoryStore implements ProjectStore {
     });
   }
 
-  async remove(path: string): Promise<void> {
+  remove(path: string): Promise<void> {
+    return exclusive(this.#lock, path, () => this.#remove(path));
+  }
+
+  async #remove(path: string): Promise<void> {
     const { directories, name } = splitPath(path);
     try {
       await (await this.#directory(directories, false))?.removeEntry(name);
@@ -243,7 +249,6 @@ export class OverlayStore implements ProjectStore {
   readonly #files: ReadonlyMap<string, File>;
   readonly #kv: KeyValue;
   readonly #newRevision: () => string;
-  readonly #appends = new AppendQueue();
 
   constructor(name: string, files: ReadonlyMap<string, File>, kv: KeyValue, newRevision = () => `local-${crypto.randomUUID()}`) {
     this.name = name;
@@ -273,7 +278,11 @@ export class OverlayStore implements ProjectStore {
     return file ? revisionOf(file) : null;
   }
 
-  async write(path: string, bytes: Uint8Array, mode: WriteMode): Promise<string> {
+  write(path: string, bytes: Uint8Array, mode: WriteMode): Promise<string> {
+    return exclusive(this.#key(""), path, () => this.#write(path, bytes, mode));
+  }
+
+  async #write(path: string, bytes: Uint8Array, mode: WriteMode): Promise<string> {
     checkMode(path, mode, await this.revision(path));
     const revision = this.#newRevision();
     await this.#kv.set(this.#key(path), { data: bytes.slice().buffer, revision } satisfies OverlayEntry);
@@ -281,22 +290,24 @@ export class OverlayStore implements ProjectStore {
   }
 
   append(path: string, bytes: Uint8Array): Promise<void> {
-    return this.#appends.run(path, async () => {
+    return exclusive(this.#key(""), path, async () => {
       const current = await this.read(path);
       const joined = new Uint8Array((current?.bytes.length ?? 0) + bytes.length);
       if (current) joined.set(current.bytes);
       joined.set(bytes, current?.bytes.length ?? 0);
-      await this.write(path, joined, { kind: "replace" });
+      await this.#write(path, joined, { kind: "replace" });
     });
   }
 
-  async remove(path: string): Promise<void> {
-    if ((await this.revision(path)) === null) return;
-    if (this.#files.has(path)) {
-      await this.#kv.set(this.#key(path), { data: null, revision: this.#newRevision() } satisfies OverlayEntry);
-    } else {
-      await this.#kv.delete(this.#key(path));
-    }
+  remove(path: string): Promise<void> {
+    return exclusive(this.#key(""), path, async () => {
+      if ((await this.revision(path)) === null) return;
+      if (this.#files.has(path)) {
+        await this.#kv.set(this.#key(path), { data: null, revision: this.#newRevision() } satisfies OverlayEntry);
+      } else {
+        await this.#kv.delete(this.#key(path));
+      }
+    });
   }
 
   async list(directory: string): Promise<string[]> {

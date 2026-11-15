@@ -38,6 +38,20 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+// The short form (`U4`, as in the page list) replaces the label where the toolbar is narrow.
+function CountTag({ count, noun, code }: { count: number; noun: string; code: string }) {
+  const label = plural(count, noun);
+  return (
+    <span class="tag-inverse" title={label}>
+      <span class="tag-long">{label}</span>
+      <span class="tag-short" aria-hidden="true">
+        {code}
+        {count}
+      </span>
+    </span>
+  );
+}
+
 function ScreenLink({ target, label }: { target: View; label: string }) {
   const current = view.value === target;
   return (
@@ -135,13 +149,11 @@ export function Toolbar() {
             <span class="tag-inverse">page kept original</span>
           ) : (
             <>
-              {summary.missing > 0 && (
-                <span class="tag-inverse">{plural(summary.missing, "missing translation")}</span>
-              )}
+              {summary.missing > 0 && <CountTag count={summary.missing} noun="missing translation" code="M" />}
               {summary.unresolved > 0 && (
-                <span class="tag-inverse">{plural(summary.unresolved, "unresolved candidate")}</span>
+                <CountTag count={summary.unresolved} noun="unresolved candidate" code="U" />
               )}
-              {summary.issues > 0 && <span class="tag-inverse">{plural(summary.issues, "issue")}</span>}
+              {summary.issues > 0 && <CountTag count={summary.issues} noun="issue" code="I" />}
             </>
           ))}
         <p class="notice mono" data-tone={message?.tone} aria-live="polite">

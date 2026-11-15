@@ -16,7 +16,7 @@ export const PAGE_FILTERS: readonly { readonly id: PageFilter; readonly label: s
  * Whether a page belongs to a filter. A page kept entirely original exports unchanged, so its
  * region counts are not work items.
  */
-export function matchesFilter(page: PageSummary, filter: PageFilter): boolean {
+function matchesFilter(page: PageSummary, filter: PageFilter): boolean {
   switch (filter) {
     case "all":
       return true;

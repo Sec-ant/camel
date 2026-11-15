@@ -33,13 +33,9 @@ const build = fetch(WASM)
 let running: Cancellation | null = null;
 // Opening a large archive scans its directory (seconds over a network share), so the reader
 // is kept for the next operation on the same comic.
-let opened: { readonly key: string; readonly source: PageSource } | null = null;
+let opened: { readonly key: number; readonly source: PageSource } | null = null;
 
-function pageReader(comic: ComicFiles): PageReader {
-  const key =
-    comic.kind === "archive"
-      ? `${comic.file.name}|${comic.file.size}|${comic.file.lastModified}`
-      : `${comic.name}|${comic.files.length}`;
+function pageReader(comic: ComicFiles, key: number): PageReader {
   if (opened?.key !== key) {
     opened?.source.free();
     opened = null;
@@ -89,12 +85,13 @@ async function run(
   job: JobSpec,
   host: JsHost,
   comic: ComicFiles | null,
+  comicId: number | null,
   font: ArrayBuffer | null,
   cancellation: Cancellation,
   emit: (event: PipelineEvent) => void,
 ): Promise<string> {
   const options = JSON.stringify(job.options);
-  const pages = (purpose: string): PageReader => pageReader(need(comic, `Open the project with its comic to ${purpose}`));
+  const pages = (purpose: string): PageReader => pageReader(need(comic, `Open the project with its comic to ${purpose}`), need(comicId, "The comic is no longer open"));
   switch (job.kind) {
     case "prepare":
       return prepare(host, options);
@@ -132,13 +129,13 @@ function analysisHost(store: StoreDescriptor, emit: (event: PipelineEvent) => vo
 }
 
 const handlers: Handlers<PipelineRequests, PipelineEvent> = {
-  async run({ job, store, comic, font }, emit) {
+  async run({ job, store, comic, comicId, font }, emit) {
     if (running) throw new Error("Another operation is running");
     const cancellation = new Cancellation();
     running = cancellation;
     try {
       const host = createHost(openStore(store), cancellation, emit);
-      return [JSON.parse(await run(job, host, comic, font, cancellation, emit)) as OperationResult];
+      return [JSON.parse(await run(job, host, comic, comicId, font, cancellation, emit)) as OperationResult];
     } finally {
       running = null;
     }
@@ -147,11 +144,11 @@ const handlers: Handlers<PipelineRequests, PipelineEvent> = {
     running?.cancel();
     return [null];
   },
-  async beginAnalysis({ store, comic, options }, emit) {
+  async beginAnalysis({ store, comic, comicId, options }, emit) {
     const json = await beginAnalysis(
       analysisHost(store, emit),
       JSON.stringify({ ...options, build: await build }),
-      pageReader(comic),
+      pageReader(comic, comicId),
     );
     return [JSON.parse(json) as boolean[]];
   },

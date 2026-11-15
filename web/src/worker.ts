@@ -1,5 +1,6 @@
-// Page-engine worker owning the camel-web wasm module for the workbench: the comic reader, the
-// Workbench (font, layout, previews), and caches of verified page bytes and rendered previews.
+// Page-engine worker owning the camel-web wasm module for the workbench: comic readers (one per
+// `openComic`), the Workbench (font, layout, previews), and caches of verified page bytes and
+// rendered previews.
 
 import { type PageSource, openPageSource } from "./comic-source.ts";
 import { type RecordSummary, type Requests, recordReference, referenceIndex } from "./protocol.ts";
@@ -9,8 +10,10 @@ import init, { Workbench, applyEdits, repairPlan, summarize, verifyPage } from "
 const PAGE_CACHE = 24;
 const PREVIEW_CACHE = 8;
 
-let comic: PageSource | null = null;
+/** Comics opened by `openComic`, by id. */
+const comics = new Map<number, PageSource>();
 let workbench: Workbench | null = null;
+/** Verified page bytes and rendered previews, keyed by comic id first ("<id>|…"). */
 const pages = new Map<string, Uint8Array>();
 const previews = new Map<string, { json: string; images: Uint8Array[] }>();
 
@@ -22,18 +25,24 @@ function remember<V>(cache: Map<string, V>, key: string, value: V, limit: number
   return value;
 }
 
-function openComic(): PageSource {
-  if (!comic) throw new Error("Choose the comic to show and edit pages");
+function comicSource(id: number): PageSource {
+  const comic = comics.get(id);
+  if (!comic) throw new Error("The comic is no longer open; choose it again");
   return comic;
 }
 
-function pageBytes(reference: string): Uint8Array {
-  const cached = pages.get(reference);
-  if (cached) return remember(pages, reference, cached, PAGE_CACHE);
+function pageBytes(comic: number, reference: string): Uint8Array {
+  const key = `${comic}|${reference}`;
+  const cached = pages.get(key);
+  if (cached) return remember(pages, key, cached, PAGE_CACHE);
   const index = referenceIndex(reference);
-  const bytes = openComic().read(index);
+  const bytes = comicSource(comic).read(index);
   verifyPage(reference, index, bytes);
-  return remember(pages, reference, bytes, PAGE_CACHE);
+  return remember(pages, key, bytes, PAGE_CACHE);
+}
+
+function forget<V>(cache: Map<string, V>, comic: number): void {
+  for (const key of cache.keys()) if (key.startsWith(`${comic}|`)) cache.delete(key);
 }
 
 function copy(bytes: Uint8Array): ArrayBuffer {
@@ -41,13 +50,17 @@ function copy(bytes: Uint8Array): ArrayBuffer {
 }
 
 const handlers: Handlers<Requests, never> = {
-  openComic({ comic: source }) {
-    comic?.free();
-    comic = null;
-    pages.clear();
-    previews.clear();
-    comic = openPageSource(source);
-    return [{ pages: [...comic.pages] }];
+  openComic({ id, comic: files }) {
+    const source = openPageSource(files);
+    comics.set(id, source);
+    return [{ id, pages: [...source.pages] }];
+  },
+  closeComic({ id }) {
+    comics.get(id)?.free();
+    comics.delete(id);
+    forget(pages, id);
+    forget(previews, id);
+    return [null];
   },
   setFont({ font, glossary }) {
     workbench?.free();
@@ -67,30 +80,30 @@ const handlers: Handlers<Requests, never> = {
     if (!workbench) throw new Error("Choose a font to open pages");
     return [workbench.document(record)];
   },
-  image({ reference }) {
-    const bytes = copy(pageBytes(reference));
+  image({ comic, reference }) {
+    const bytes = copy(pageBytes(comic, reference));
     return [bytes, [bytes]];
   },
-  prefetch({ reference }) {
-    pageBytes(reference);
+  prefetch({ comic, reference }) {
+    pageBytes(comic, reference);
     return [null];
   },
-  preview({ reference, record, key }) {
+  preview({ comic, reference, record, key }) {
     if (!workbench) throw new Error("Choose a font to render previews");
-    const cacheKey = `${reference}|${key}`;
-    const rendered = previews.get(cacheKey) ?? workbench.preview(record, pageBytes(reference));
+    const cacheKey = `${comic}|${reference}|${key}`;
+    const rendered = previews.get(cacheKey) ?? workbench.preview(record, pageBytes(comic, reference));
     remember(previews, cacheKey, rendered, PREVIEW_CACHE);
     const images = rendered.images.map(copy);
     return [{ json: rendered.json, images }, images];
   },
-  apply({ reference, record, edits }) {
-    return [applyEdits(record, edits, pageBytes(reference))];
+  apply({ comic, reference, record, edits }) {
+    return [applyEdits(record, edits, pageBytes(comic, reference))];
   },
   repairPlan({ plan, index, previous, keys, position }) {
     return [repairPlan(plan, index, previous, keys, position)];
   },
-  pageBytes({ index }) {
-    const bytes = copy(openComic().read(index));
+  pageBytes({ comic, index }) {
+    const bytes = copy(comicSource(comic).read(index));
     return [bytes, [bytes]];
   },
 };

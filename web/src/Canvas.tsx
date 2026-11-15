@@ -54,12 +54,13 @@ import {
   zoomMode,
 } from "./state.ts";
 import { type Size, type View, fitPage, fitRect, fitWidth, reveal, toPage, zoomAt } from "./view.ts";
+import { onRadioGroupKey } from "./radio.ts";
 
 const MARGIN = 32;
 const MIN_DRAFT = 4;
 
 export const view = signal<View>({ scale: 1, x: 0, y: 0 });
-export const viewportSize = signal<Size>({ width: 0, height: 0 });
+const viewportSize = signal<Size>({ width: 0, height: 0 });
 export const spaceHeld = signal(false);
 const cursor = signal<{ x: number; y: number } | null>(null);
 const dragRect = signal<Rect | null>(null);
@@ -549,7 +550,7 @@ function CanvasHead() {
             {Math.round(scale * 100)}%
           </span>
         </p>
-        <div class="buttons joined" role="radiogroup" aria-label="Display">
+        <div class="buttons joined" role="radiogroup" aria-label="Display" onKeyDown={onRadioGroupKey}>
           {MODES.map((item) => (
             <button
               key={item.id}
@@ -557,6 +558,7 @@ function CanvasHead() {
               role="radio"
               class="button"
               aria-checked={viewMode.value === item.id}
+              tabIndex={viewMode.value === item.id ? 0 : -1}
               title={`${item.label} (${item.key})`}
               onClick={() => {
                 viewMode.value = item.id;

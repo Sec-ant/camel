@@ -100,3 +100,14 @@ test("audit groups mark their pages running, then done when the review is valida
   progress.settle(false, 2);
   assert.deepEqual([...progress.states.slice(3, 6)], [PAGE_DONE, PAGE_PENDING, PAGE_PENDING]);
 });
+
+test("job counts leave out empty counts and name pages a stopped run never reached", () => {
+  const progress = new Progress(["a", "b", "c", "d"]);
+  assert.equal(progress.counts(false), "0 done");
+  progress.complete(0, 1);
+  progress.skip(1);
+  assert.equal(progress.counts(false), "1 done · 1 already complete");
+  assert.equal(progress.counts(true), "1 done · 1 already complete · 2 not reached");
+  progress.fail(2, "c: broken");
+  assert.equal(progress.counts(true), "1 done · 1 already complete · 1 failed · 1 not reached");
+});

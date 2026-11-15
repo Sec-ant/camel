@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Cancellation, createHost, requestError } from "../src/pipeline/host.ts";
@@ -39,6 +40,20 @@ test("host forwards reported events and observes cancellation", async () => {
   cancellation.cancel();
   await sleeping;
   assert.equal(host.cancelled(), true);
+});
+
+test("sleep returns at once once cancelled and leaves no listener behind", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const cancellation = new Cancellation();
+  const host = createHost(store(), cancellation, () => undefined);
+  const sleeping = host.sleep(1000);
+  assert.equal(getEventListeners(cancellation.signal, "abort").length, 1);
+  context.mock.timers.tick(1000);
+  await sleeping;
+  assert.equal(getEventListeners(cancellation.signal, "abort").length, 0);
+  cancellation.cancel();
+  // With the timer clock stopped, only an immediate return can settle this.
+  await host.sleep(60_000);
 });
 
 test("failed requests are transient network errors with a reason", () => {
