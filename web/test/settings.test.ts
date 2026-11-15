@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { DEFAULT_SETTINGS, exportConfig, importConfig, serviceOptions } from "../src/settings.ts";
+import { DEFAULT_SETTINGS, exportConfig, importConfig, serviceOptions, settingsProblem } from "../src/settings.ts";
 
 test("importConfig takes the CLI translation section and reports what it cannot use", () => {
   const { settings, skipped } = importConfig(
@@ -74,4 +74,16 @@ test("serviceOptions names the missing setting or builds the run options", () =>
     variables: {},
     request_options: {},
   });
+});
+
+test("the base URL must be https, or http to this machine", () => {
+  const problem = (base_url: string): string | null => settingsProblem({ ...DEFAULT_SETTINGS, base_url });
+  assert.equal(problem("https://api.example.com/v1"), null);
+  assert.equal(problem("http://127.0.0.1:5175/v1"), null);
+  assert.equal(problem("http://localhost:8080/v1"), null);
+  assert.equal(problem("http://[::1]:8080/v1"), null);
+  assert.match(problem("http://api.example.com/v1")!, /https/);
+  assert.match(problem("ftp://localhost/v1")!, /https/);
+  assert.match(problem("not a url")!, /not a valid URL/);
+  assert.throws(() => importConfig(JSON.stringify({ translation: { base_url: "http://evil.example/v1" } }), DEFAULT_SETTINGS), /https/);
 });

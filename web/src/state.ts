@@ -142,7 +142,7 @@ export function setOverlay(key: keyof Overlays, value: boolean): void {
   persist("overlays", overlays.value);
 }
 
-let noticeTimer: number | undefined;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function announce(text: string, tone: Notice["tone"] = "info"): void {
   notice.value = { text, tone };
@@ -178,9 +178,13 @@ function enqueue(run: (current: PageDocument) => Promise<EditResult>): Promise<E
   writeEpoch++;
   saveState.value = "saving";
   const task = queue.then(async () => {
-    const current = doc.value;
-    if (!current || current.index !== index) return null;
     try {
+      const current = doc.value;
+      if (!current || current.index !== index) {
+        saveState.value = "idle";
+        announce(`An edit to page ${index + 1} was not saved: the page was left before it could be written`, "error");
+        return null;
+      }
       const result = await run(current);
       if (pageIndex.value === index) acceptDocument(result.page);
       if (result.warning) announce(result.warning, "error");
@@ -240,7 +244,7 @@ export async function discardChanges(): Promise<void> {
 }
 
 /** Loads the review items of the newest audit and check-terms reports. */
-export async function loadReviews(): Promise<void> {
+async function loadReviews(): Promise<void> {
   if (!session) return;
   const { store } = session.files;
   const names = await store.list(REPORTS);
@@ -313,10 +317,10 @@ export function effectiveMask(region: Region, layer: "erase" | "interior"): read
 
 // Previews are re-rendered in the worker after every change; old patches stay visible until
 // the new ones arrive.
-let previewTimer: number | undefined;
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
 let previewToken = 0;
 
-export function schedulePreview(delay: number): void {
+function schedulePreview(delay: number): void {
   clearTimeout(previewTimer);
   previewBusy.value = true;
   previewTimer = setTimeout(() => void loadPreview(), delay);
@@ -433,24 +437,53 @@ export function stepRegion(direction: 1 | -1): void {
   selectRegion(regions[next]!.id);
 }
 
-let polling = false;
+let polling: Promise<void> | null = null;
+let pollAgain = false;
+let pollFailed = false;
 
 /**
  * Refreshes page summaries; with `poll` it first re-reads files changed outside the
- * workbench and reloads the open page when it is safe to do so.
+ * workbench and reloads the open page when it is safe to do so. A poll requested while one
+ * runs is run once more after it, so the latest request sees the latest files.
  */
-export async function refreshProject(poll = false): Promise<void> {
-  if (!session || (poll && polling)) return;
+function refreshProject(poll = false): Promise<void> {
+  if (!poll) return session ? showProject(session.project(), writeEpoch) : Promise.resolve();
+  if (polling) {
+    pollAgain = true;
+    return polling;
+  }
+  polling = (async () => {
+    try {
+      do {
+        pollAgain = false;
+        await pollOnce();
+      } while (pollAgain);
+    } finally {
+      polling = null;
+    }
+  })();
+  return polling;
+}
+
+async function pollOnce(): Promise<void> {
+  if (!session) return;
   const epoch = writeEpoch;
   let next: Project;
-  polling ||= poll;
   try {
-    next = poll ? await session.poll() : session.project();
-  } catch {
+    next = await session.poll();
+  } catch (error) {
+    // Polls repeat every few seconds: a failure is reported once, until a poll succeeds.
+    if (!pollFailed) {
+      announce(`Could not re-read the project: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+    pollFailed = true;
     return;
-  } finally {
-    if (poll) polling = false;
   }
+  pollFailed = false;
+  await showProject(next, epoch);
+}
+
+async function showProject(next: Project, epoch: number): Promise<void> {
   project.value = next;
   const current = doc.value;
   const summary = current && next.pages[current.index];
@@ -474,7 +507,7 @@ function writeHash(): void {
   if (location.hash !== hash) history.replaceState(null, "", hash);
 }
 
-export function readHash(): { page: number; region: number | null } {
+function readHash(): { page: number; region: number | null } {
   const match = /^#\/(\d+)(?:\/(\d+))?$/.exec(location.hash);
   if (!match) return { page: 0, region: null };
   return { page: Number(match[1]) - 1, region: match[2] === undefined ? null : Number(match[2]) };

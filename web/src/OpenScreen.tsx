@@ -3,7 +3,7 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import { call } from "./engine.ts";
+import { call, openComic } from "./engine.ts";
 import { NewProject } from "./NewProject.tsx";
 import { recordReference } from "./protocol.ts";
 import { Session, readIndex } from "./session.ts";
@@ -43,7 +43,16 @@ interface ProjectState {
 
 interface ComicState {
   readonly choice: ComicChoice;
+  /** Opened in the page-engine worker; handed to the session when the workbench opens. */
+  readonly id: number;
   readonly pages: string[];
+}
+
+/** Opens `choice` in the page-engine worker and releases the comic it replaces. */
+export async function replaceComic(previous: { readonly id: number } | null, choice: ComicChoice): Promise<{ id: number; pages: string[] }> {
+  // A comic that fails to close belongs to a worker that is gone.
+  if (previous) void call("closeComic", { id: previous.id }).catch(() => undefined);
+  return openComic(choice.comic);
 }
 
 export type Check = { readonly state: "idle" | "checking" | "ok" } | { readonly state: "error"; readonly message: string };
@@ -96,18 +105,39 @@ function OpenProject() {
     if (tier === "snapshot") void browserProjects().then(setStored);
   }, []);
 
-  // Verify the comic against the project's first page whenever either changes.
+  // Check the comic against the project (page count, then page 1) whenever either changes.
   useEffect(() => {
-    if (!comic || !projectState?.reference) return;
+    if (!comic) return undefined;
+    if (!projectState) {
+      setComicCheck({ state: "ok" });
+      return undefined;
+    }
+    if (comic.pages.length !== projectState.pages) {
+      setComicCheck({
+        state: "error",
+        message: `This comic does not match the project: it has ${comic.pages.length} pages, the project has ${projectState.pages}`,
+      });
+      return undefined;
+    }
+    const { reference } = projectState;
+    if (!reference) {
+      setComicCheck({ state: "ok" });
+      return undefined;
+    }
+    let current = true;
     setComicCheck({ state: "checking" });
-    call("image", { reference: projectState.reference })
-      .then(() => setComicCheck({ state: "ok" }))
-      .catch((error: unknown) =>
+    call("image", { comic: comic.id, reference })
+      .then(() => current && setComicCheck({ state: "ok" }))
+      .catch((error: unknown) => {
+        if (!current) return;
         setComicCheck({
           state: "error",
           message: `This comic does not match the project: page 1 differs (${errorMessage(error)})`,
-        }),
-      );
+        });
+      });
+    return () => {
+      current = false;
+    };
   }, [comic, projectState]);
 
   const loadProject = async (choice: ProjectChoice): Promise<void> => {
@@ -126,9 +156,7 @@ function OpenProject() {
   const loadComic = async (choice: ComicChoice): Promise<void> => {
     setComicCheck({ state: "checking" });
     try {
-      const { pages } = await call("openComic", { comic: choice.comic });
-      setComic({ choice, pages });
-      if (!projectState?.reference) setComicCheck({ state: "ok" });
+      setComic({ choice, ...(await replaceComic(comic, choice)) });
     } catch (error) {
       setComic(null);
       setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${errorMessage(error)}` });
@@ -146,7 +174,7 @@ function OpenProject() {
     try {
       const session = await Session.open({
         files: projectState.choice.files,
-        comic: comic && comicCheck.state === "ok" ? { files: comic.choice.comic, pages: comic.pages } : null,
+        comic: comic && comicCheck.state === "ok" ? { id: comic.id, files: comic.choice.comic, pages: comic.pages } : null,
         font,
         onProgress: (done, total) => setProgress({ done, total }),
       });

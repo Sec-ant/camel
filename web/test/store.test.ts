@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HostError, type KeyValue, OverlayStore, checkMode, classifyFolder, splitPath } from "../src/storage/store.ts";
+import { DirectoryStore, HostError, type KeyValue, OverlayStore, checkMode, classifyFolder, splitPath } from "../src/storage/store.ts";
 
 function memory(): KeyValue {
   const map = new Map<string, unknown>();
@@ -113,4 +113,77 @@ test("classifyFolder tells new, resumable and occupied output folders apart", ()
   assert.equal(classifyFolder(["source.json", "analysis-state.json", "00001.json"]), "resumable");
   assert.equal(classifyFolder(["index.json", "00001.json"]), "project");
   assert.equal(classifyFolder(["notes.txt"]), "occupied");
+});
+
+/** A flat folder handle in memory; `failWrites` makes the next createWritable calls fail. */
+class FakeFolder {
+  readonly name = "book";
+  readonly files = new Map<string, { data: Uint8Array; modified: number }>();
+  failWrites = 0;
+  #clock = 0;
+
+  getDirectoryHandle(): Promise<never> {
+    return Promise.reject(new DOMException("no folders here", "NotFoundError"));
+  }
+
+  async getFileHandle(name: string, options?: { create?: boolean }): Promise<object> {
+    if (!this.files.has(name)) {
+      if (!options?.create) throw new DOMException(name, "NotFoundError");
+      this.files.set(name, { data: new Uint8Array(), modified: ++this.#clock });
+    }
+    return {
+      getFile: async () => {
+        const entry = this.files.get(name);
+        if (!entry) throw new DOMException(name, "NotFoundError");
+        return new File([entry.data as Uint8Array<ArrayBuffer>], name, { lastModified: entry.modified });
+      },
+      createWritable: async () => {
+        if (this.failWrites > 0) {
+          this.failWrites--;
+          throw new DOMException("no space", "QuotaExceededError");
+        }
+        let data: Uint8Array = new Uint8Array();
+        return {
+          write: async (bytes: Uint8Array) => {
+            data = bytes;
+          },
+          close: async () => {
+            this.files.set(name, { data, modified: ++this.#clock });
+          },
+        };
+      },
+    };
+  }
+
+  async removeEntry(name: string): Promise<void> {
+    if (!this.files.delete(name)) throw new DOMException(name, "NotFoundError");
+  }
+}
+
+function folder(): { fake: FakeFolder; store: DirectoryStore } {
+  const fake = new FakeFolder();
+  // DirectoryStore uses only the handle methods FakeFolder implements.
+  const handle = fake as unknown as FileSystemDirectoryHandle;
+  return { fake, store: new DirectoryStore(handle) };
+}
+
+test("a failed create leaves no empty file behind", async () => {
+  const { fake, store } = folder();
+  fake.failWrites = 1;
+  await rejectsWith(store.write("00001.json", bytes("a"), { kind: "create_new" }), "io");
+  assert.equal(fake.files.has("00001.json"), false);
+  await store.write("00001.json", bytes("a"), { kind: "create_new" });
+  assert.equal(text((await store.read("00001.json"))?.bytes), "a");
+});
+
+test("concurrent compare-and-swap writes to one file: the second sees the first", async () => {
+  const { store } = folder();
+  const revision = await store.write("00001.json", bytes("a"), { kind: "create_new" });
+  const mode = { kind: "replace_if_revision", revision } as const;
+  const results = await Promise.allSettled([store.write("00001.json", bytes("b"), mode), store.write("00001.json", bytes("c"), mode)]);
+  assert.deepEqual(
+    results.map((result) => result.status),
+    ["fulfilled", "rejected"],
+  );
+  assert.equal(text((await store.read("00001.json"))?.bytes), "b");
 });

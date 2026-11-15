@@ -152,6 +152,19 @@ export class Progress {
       : { finished: this.done + this.skipped + this.failed, total: this.total, label: "pages" };
   }
 
+  /**
+   * Page counts for the job summary. Counts that are zero are left out (except done), and a
+   * run that ended early (`stopped`: failed or cancelled) names the pages it never reached.
+   */
+  counts(stopped: boolean): string {
+    const parts = [`${this.done} done`];
+    if (this.skipped > 0) parts.push(`${this.skipped} already complete`);
+    if (this.failed > 0) parts.push(`${this.failed} failed`);
+    const unreached = this.total - this.done - this.skipped - this.failed;
+    if (stopped && unreached > 0) parts.push(`${unreached} not reached`);
+    return parts.join(" · ");
+  }
+
   /** Estimated milliseconds left, from the recent completion rate; null until it is known. */
   eta(now: number): number | null {
     const times = this.#completions;

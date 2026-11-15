@@ -177,12 +177,14 @@ function CommitText(props: CommitTextProps) {
   const sent = useRef<string | null>(null);
 
   // Adopt server changes unless the user has typed something not yet sent; this also picks
-  // up the server's normalized form of what we just committed.
+  // up the server's normalized form of what we just committed. A new server value settles
+  // what was sent, so typing that text again later commits it again.
   useEffect(() => {
-    setText((current) =>
-      current === serverValue.current || current === sent.current ? value : current,
-    );
+    const awaited = sent.current;
+    const previous = serverValue.current;
+    sent.current = null;
     serverValue.current = value;
+    setText((current) => (current === previous || current === awaited ? value : current));
   }, [value]);
 
   const commit = useRef<() => Promise<void>>(async () => {});

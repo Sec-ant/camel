@@ -1,8 +1,11 @@
 // Bundles the workbench into dist/: index.html, assets/app.{js,css}, the workers
 // (assets/worker.js: page engine, assets/pipeline-worker.js: long operations,
-// assets/analyzer-worker.js: one recognition engine each) and the camel-web wasm binary.
+// assets/analyzer-worker.js: one recognition engine each) and the camel-web wasm binary,
+// which must have been built into src/wasm first (`just web`).
 // `node build.mjs --serve` rebuilds on change and serves dist on http://localhost:5173 (a
 // secure context, as the File System Access API requires).
+// Targets: Chromium 120, Firefox 124 and Safari 17.4, the first releases with every API the
+// code uses (AbortSignal.any, Promise.withResolvers).
 import { access, copyFile, mkdir } from "node:fs/promises";
 import { context } from "esbuild";
 
@@ -10,39 +13,19 @@ const serve = process.argv.includes("--serve");
 const GLUE = "src/wasm/camel_web.js";
 const WASM = "src/wasm/camel_web_bg.wasm";
 
-const exists = (path) =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
-
-const haveWasm = (await exists(GLUE)) && (await exists(WASM));
-if (!haveWasm) {
-  console.warn(
-    `warning: ${GLUE} / ${WASM} not found; building with a stub (build crates/camel-web into web/src/wasm). The open screen works, opening a project does not.`,
-  );
+for (const path of [GLUE, WASM]) {
+  await access(path).catch(() => {
+    console.error(`error: ${path} not found; build crates/camel-web into web/src/wasm first (just web)`);
+    process.exit(1);
+  });
 }
-
-// Stands in for the wasm-bindgen glue until crates/camel-web has been built.
-const wasmStub = {
-  name: "camel-web-stub",
-  setup(build) {
-    build.onResolve({ filter: /wasm\/camel_web\.js$/ }, () => ({ path: "camel-web-stub", namespace: "stub" }));
-    build.onLoad({ filter: /.*/, namespace: "stub" }, () => ({
-      contents: `export default async function init() { throw new Error("The camel-web module has not been built (web/src/wasm is empty)"); }
-export const Comic = null, Workbench = null, applyEdits = null, repairPlan = null, summarize = null, verifyPage = null,
-  Analyzer = null, audit = null, beginAnalysis = null, checkLayout = null, checkTerms = null, exportPages = null,
-  finishAnalysis = null, prepare = null, translate = null;`,
-    }));
-  },
-};
 
 const copyStatic = {
   name: "copy-static",
   setup(build) {
     build.onEnd(async () => {
       await copyFile("index.html", "dist/index.html");
-      if (haveWasm) await copyFile(WASM, "dist/assets/camel_web_bg.wasm");
+      await copyFile(WASM, "dist/assets/camel_web_bg.wasm");
     });
   },
 };
@@ -60,13 +43,13 @@ const ctx = await context({
   bundle: true,
   minify: true,
   format: "esm",
-  target: ["chrome120", "safari17", "firefox121"],
+  target: ["chrome120", "safari17.4", "firefox124"],
   jsx: "automatic",
   jsxImportSource: "preact",
   charset: "utf8",
   legalComments: "none",
   logLevel: "info",
-  plugins: haveWasm ? [copyStatic] : [wasmStub, copyStatic],
+  plugins: [copyStatic],
 });
 
 if (serve) {

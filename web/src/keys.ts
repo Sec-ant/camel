@@ -43,13 +43,26 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement && !["checkbox", "radio", "button", "color"].includes(target.type);
 }
 
+/** Keys a focused control handles itself: Space and Enter press it, arrows move a radio group. */
+function isControlKey(event: KeyboardEvent): boolean {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return false;
+  if (event.key.startsWith("Arrow") && target.closest('[role="radiogroup"]')) return true;
+  const pressable =
+    target instanceof HTMLButtonElement ||
+    target instanceof HTMLAnchorElement ||
+    target instanceof HTMLInputElement ||
+    target.getAttribute("role") === "radio";
+  return pressable && (event.code === "Space" || event.key === "Enter");
+}
+
 function onKeyDown(event: KeyboardEvent): void {
   if (event.key === "Escape" && helpOpen.value) {
     helpOpen.value = false;
     return;
   }
   // Workbench shortcuts do nothing on the Jobs and Settings screens.
-  if (isTextField(event.target) || screen.value !== "main") return;
+  if (isTextField(event.target) || isControlKey(event) || screen.value !== "main") return;
   const mod = event.metaKey || event.ctrlKey;
   const key = event.key.toLowerCase();
 
@@ -105,7 +118,7 @@ function onKeyDown(event: KeyboardEvent): void {
   } else if (key === "arrowleft" || key === "pageup") {
     if (event.shiftKey) stepFilteredPage(-1);
     else stepPage(-1);
-  } else if (key === "enter" && selection.value !== null && !(event.target instanceof HTMLButtonElement)) {
+  } else if (key === "enter" && selection.value !== null) {
     focusRequest.value = { field: "translation", region: selection.value };
   } else if (key === "escape") {
     if (draft.value) draft.value = null;

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && node build.mjs",
+    "build": "tsc --noEmit && tsc --noEmit -p test && node build.mjs",
     "dev": "node build.mjs --serve",
     "test": "node --test test/*.test.ts"
   },
@@ -12,6 +12,7 @@
     "preact": "11.2.0"
   },
   "devDependencies": {
+    "@types/node": "24.19.2",
     "esbuild": "0.28.2",
     "typescript": "7.0.2"
   }

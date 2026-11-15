@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { PageSummary } from "./model.ts";
 import { PAGE_FILTERS, filterCounts, filterPages } from "./pages.ts";
+import { onRadioGroupKey } from "./radio.ts";
 import { pageFilter, pageIndex, project } from "./state.ts";
 
 const ROW_HEIGHT = 28;
@@ -61,7 +62,7 @@ export function PageList() {
         <h2>Pages</h2>
         <span class="mono dim">{pages.length}</span>
       </div>
-      <div class="rows filters" role="radiogroup" aria-label="Filter pages">
+      <div class="rows filters" role="radiogroup" aria-label="Filter pages" onKeyDown={onRadioGroupKey}>
         {PAGE_FILTERS.map((item) => (
           <button
             key={item.id}
@@ -69,6 +70,7 @@ export function PageList() {
             role="radio"
             class="row"
             aria-checked={filter === item.id}
+            tabIndex={filter === item.id ? 0 : -1}
             onClick={() => (pageFilter.value = item.id)}
           >
             <span>{item.label}</span>
@@ -76,7 +78,9 @@ export function PageList() {
           </button>
         ))}
       </div>
-      <p class="legend mono">M missing · U unresolved · I issues</p>
+      <p class="legend mono">
+        <span>M missing</span> · <span>U unresolved</span> · <span>I issues</span>
+      </p>
       <div
         ref={scroller}
         class="page-scroll"

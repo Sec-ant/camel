@@ -13,10 +13,10 @@ export interface Size {
   readonly height: number;
 }
 
-export const MIN_SCALE = 0.05;
+const MIN_SCALE = 0.05;
 export const MAX_SCALE = 16;
 
-export function clampScale(scale: number): number {
+function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
 

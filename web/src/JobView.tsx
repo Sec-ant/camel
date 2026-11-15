@@ -93,7 +93,7 @@ export function JobView(props: { onPage?: (index: number) => void }) {
           </span>
         </div>
         <p class="mono dim">
-          {progress.done} done · {progress.skipped} already complete · {progress.failed} failed
+          {progress.counts(job.status === "failed" || job.status === "cancelled")}
           {progress.scenes.total > 0 && ` · scenes ${progress.scenes.done} / ${progress.scenes.total}`}
         </p>
         {job.result && <p class="job-result">{job.result.message}</p>}
@@ -103,7 +103,7 @@ export function JobView(props: { onPage?: (index: number) => void }) {
           </p>
         )}
       </div>
-      <PageMap job={job} onPage={props.onPage} />
+      <PageMap job={job} />
       {progress.problems.length > 0 && (
         <div class="job-errors">
           <h3 class="subhead mono">
@@ -134,7 +134,8 @@ export function JobView(props: { onPage?: (index: number) => void }) {
   );
 }
 
-function PageMap({ job, onPage }: { job: Job; onPage?: ((index: number) => void) | undefined }) {
+/** Page states at a glance; the Problems and Log lists link to the pages. */
+function PageMap({ job }: { job: Job }) {
   const { states } = job.progress;
   const cells = [];
   for (let index = 0; index < states.length; index++) {
@@ -149,16 +150,7 @@ function PageMap({ job, onPage }: { job: Job; onPage?: ((index: number) => void)
   }
   return (
     <div class="page-map-wrap">
-      <div
-        class="page-map"
-        data-clickable={onPage ? "" : undefined}
-        aria-hidden="true"
-        onClick={(event) => {
-          const cell = (event.target as HTMLElement).closest(".cell");
-          if (!cell || !onPage) return;
-          onPage([...cell.parentElement!.children].indexOf(cell));
-        }}
-      >
+      <div class="page-map" aria-hidden="true">
         {cells}
       </div>
       <p class="legend-row mono dim">

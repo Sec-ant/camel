@@ -50,8 +50,21 @@ export interface ServiceOptions {
 const RESERVED_OPTIONS = ["model", "messages", "stream"];
 const RESERVED_VARIABLES = ["target_language", "style", "terminology", "context", "visual", "response_schema"];
 
-/** The CLI's checks on request options and template variables; null when valid. */
+const LOOPBACK = ["localhost", "127.0.0.1", "[::1]"];
+
+/**
+ * The CLI's checks on request options and template variables, and that the API key only
+ * travels over https (plain http to this machine is allowed); null when valid.
+ */
 export function settingsProblem(settings: Settings): string | null {
+  const base = settings.base_url.trim();
+  if (base) {
+    if (!URL.canParse(base)) return "The base URL is not a valid URL";
+    const url = new URL(base);
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && LOOPBACK.includes(url.hostname))) {
+      return "The base URL must use https (http only for localhost)";
+    }
+  }
   for (const key of Object.keys(settings.request_options)) {
     if (RESERVED_OPTIONS.includes(key)) return `Request options cannot override ${key}`;
   }

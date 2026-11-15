@@ -10,7 +10,7 @@
 
 import { idbGet, idbKeyValue, idbSet } from "./idb.ts";
 import { DirectoryStore, type FolderState, OverlayStore, type ProjectStore, type WriteMode, classifyFolder } from "./store.ts";
-import type { ZipEntry } from "./zip.ts";
+import { type ZipEntry, zipBlob } from "./zip.ts";
 
 declare global {
   interface Window {
@@ -128,7 +128,7 @@ export async function reopen(
   return { files: new ProjectFiles(new DirectoryStore(entry.project)), comic: await reopenComic(entry.comic) };
 }
 
-export async function reopenComic(handle: RecentProject["comic"]): Promise<ComicFiles | null> {
+async function reopenComic(handle: RecentProject["comic"]): Promise<ComicFiles | null> {
   if (!handle || !(await permitted(handle.handle, "read"))) return null;
   return handle.kind === "archive"
     ? { kind: "archive", file: await handle.handle.getFile() }
@@ -308,7 +308,7 @@ export async function persistStorage(): Promise<boolean> {
 
 // ---------- Models ----------
 
-export const MODEL_FILES = ["detector.onnx", "recognizer.onnx"] as const;
+const MODEL_FILES = ["detector.onnx", "recognizer.onnx"] as const;
 
 export interface ModelFiles {
   readonly detector: File;
@@ -382,11 +382,30 @@ export async function chooseExportTarget(name: string, archive: boolean): Promis
     return handle && { kind: "directory", handle, download: false };
   }
   const exports = (await opfsDirectory(["exports"], true))!;
-  // A previous export of the same name is replaced.
-  await exports.removeEntry(name, { recursive: true }).catch(() => undefined);
+  // Leftovers of an export that did not finish are removed with it.
+  const leftovers: string[] = [];
+  for await (const entry of exports.keys()) leftovers.push(entry);
+  for (const entry of leftovers) await exports.removeEntry(entry, { recursive: true });
   return archive
     ? { kind: "archive", handle: await exports.getFileHandle(name, { create: true }), download: true }
     : { kind: "directory", handle: await exports.getDirectoryHandle(name, { create: true }), download: true };
+}
+
+/**
+ * Snapshot tier: downloads a finished export (a folder as a zip) and removes it from private
+ * storage. The download reads its blob later, so the bytes are copied out of storage first.
+ */
+export async function downloadExport(target: ExportTarget): Promise<void> {
+  const { handle } = target;
+  const blob = handle.kind === "file" ? await handle.getFile() : await zipBlob(await directoryEntries(handle));
+  const copy = new Blob([await blob.arrayBuffer()], { type: blob.type });
+  download(copy, handle.kind === "file" ? handle.name : `${handle.name}.zip`);
+  await discardExport(target);
+}
+
+/** Snapshot tier: removes an export from private storage. */
+export async function discardExport(target: ExportTarget): Promise<void> {
+  await (await opfsDirectory(["exports"], false))?.removeEntry(target.handle.name, { recursive: true });
 }
 
 /** Saves a blob through the browser's download mechanism. */
