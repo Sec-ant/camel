@@ -1,38 +1,99 @@
-[package]
-name = "camel"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.88"
-description = "A composable comic translation pipeline"
-license = "MIT OR Apache-2.0"
-
 [workspace]
-members = ["crates/camel-cli", "crates/camel-vision"]
+members = ["crates/*"]
 default-members = ["crates/camel-cli"]
 resolver = "3"
 
-[dependencies]
-base64 = "0.22"
-ab_glyph = "0.2.32"
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+camel = { path = "crates/camel", version = "0.1.0" }
+camel-project = { path = "crates/camel-project", version = "0.1.0" }
+camel-vision = { path = "crates/camel-vision", version = "0.1.0" }
+
+ab_glyph = { version = "0.2.32", default-features = false }
+anyhow = { version = "1", default-features = false }
+base64 = { version = "0.22", default-features = false }
+clap = { version = "4", default-features = false }
+flate2 = { version = "1", default-features = false }
+image = { version = "0.25.10", default-features = false }
 jieba-rs = { version = "0.11", default-features = false }
+js-sys = { version = "0.3", default-features = false }
+mimalloc = { version = "0.1", default-features = false }
 rars = { version = "=0.10.0", default-features = false }
-zip = { version = "7.2", default-features = false, features = ["deflate-flate2"] }
+rten = { version = "0.26.0", default-features = false }
+rustix = { version = "1", default-features = false }
+serde = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false }
+sha2 = { version = "0.10", default-features = false }
+tempfile = { version = "3", default-features = false }
+thiserror = { version = "2", default-features = false }
+tiny_http = { version = "0.12", default-features = false }
+ureq = { version = "3", default-features = false }
+wasm-bindgen = { version = "=0.2.129", default-features = false }
+zip = { version = "7.2", default-features = false }
 
-[dev-dependencies]
-tempfile = "3"
-
-[lints.rust]
-unsafe_code = "forbid"
+[workspace.lints.rust]
+ambiguous_negative_literals = "warn"
 missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
 
-[lints.clippy]
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
 todo = "warn"
+too_long_first_doc_paragraph = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+
+# Pixel geometry converts between u32 image coordinates, i64 deltas and f32/f64
+# model values throughout. Image dimensions are bounded by the decoder, so these
+# casts are reviewed at the boundaries instead of at every arithmetic site.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+# Detection, segmentation and layout search are long single-pass algorithms;
+# splitting them by line count would scatter shared numeric state.
+too_many_lines = "allow"
+# Transitive dependencies (rten, image, rustls) pin different minor versions.
+multiple_crate_versions = "allow"
+# Structured log templates are plain strings.
+literal_string_with_formatting_args = "allow"
 
 [profile.release]
 lto = "thin"
@@ -57,4 +118,16 @@ opt-level = 3
 [profile.dist.package.rten-vecmath]
 opt-level = 3
 [profile.dist.package.rten-simd]
+opt-level = 3
+
+# WebAssembly workbench: small download, wasm-opt shrinks it further.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+codegen-units = 1
+lto = "fat"
+panic = "abort"
+strip = "none"
+
+[profile.web.package.camel]
 opt-level = 3

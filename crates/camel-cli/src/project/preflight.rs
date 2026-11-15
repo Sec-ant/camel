@@ -1,4 +1,21 @@
-use super::*;
+//! `camel check-layout`: typesetting checks with the export font, without erasing pages.
+
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context as _, Result, bail};
+use camel::layout::{LayoutError, LayoutOptions, Typesetter};
+use serde::{Deserialize, Serialize};
+
+use camel_project::{
+    Record, is_content_filter_issue,
+    render::{RetainReason, plan_page},
+};
+
+use super::{default_font, read, save, source};
 
 /// Results of checking the same page layouts used by rendering, without erasing images.
 #[derive(Debug, Serialize, Deserialize)]
@@ -37,9 +54,18 @@ fn issue(kind: &str, region_id: Option<u32>, detail: Option<String>) -> LayoutIs
     }
 }
 
+fn layout_issue(id: u32, error: &LayoutError) -> LayoutIssue {
+    let kind = match error {
+        LayoutError::NoFit(_) => "no_fit",
+        LayoutError::MissingGlyph(_) => "missing_glyph",
+        _ => "typeset_error",
+    };
+    issue(kind, Some(id), Some(error.to_string()))
+}
+
 fn inspect_page(
     name: &str,
-    record: &mut Record,
+    record: &Record,
     image: &image::RgbImage,
     typesetter: &Typesetter,
 ) -> LayoutReportPage {
@@ -66,83 +92,66 @@ fn inspect_page(
         };
         result.issues.push(issue(kind, None, Some(text.clone())));
     }
-    if record.preserve_original {
-        return result;
-    }
-    let check_glyphs = native_glyph_masks(record.analysis.as_ref());
-    for region in &mut record.page.regions {
-        let id = region.block.id;
-        if record.preserved_regions.contains(&id) {
-            region.translation = None;
-            continue;
+    let plan = plan_page(record, |page, anchors| {
+        typesetter.text_layers(image, page, LayoutOptions::default(), anchors)
+    });
+    let plan = match plan {
+        Ok(plan) => plan,
+        Err(LayoutError::Region { id, source }) => {
+            result.checked = false;
+            result.issues.push(layout_issue(id, &source));
+            result.issues.push(issue(
+                "page_error",
+                None,
+                Some("typesetter reported an unknown region".into()),
+            ));
+            return result;
         }
-        let kind = match region.translation.as_deref() {
-            None => Some("untranslated"),
-            Some(text) if text.trim().is_empty() => Some("untranslated"),
-            Some(text) if text.trim() == region.block.text.trim() => Some("unchanged"),
-            Some(_) if check_glyphs && region.bubble.glyphs.is_empty() => {
-                Some("missing_glyph_mask")
+        Err(error) => {
+            result.checked = false;
+            result
+                .issues
+                .push(issue("page_error", None, Some(error.to_string())));
+            return result;
+        }
+    };
+    for retention in &plan.retained {
+        let id = Some(retention.region);
+        let kind = match retention.reason {
+            RetainReason::MissingTranslation => "untranslated",
+            RetainReason::SameAsSource => "unchanged",
+            RetainReason::MissingGlyphMask => "missing_glyph_mask",
+            RetainReason::OverlapsRetained => "overlap",
+            RetainReason::LayoutFailed => {
+                let error = retention
+                    .error
+                    .as_ref()
+                    .expect("layout failure has an error");
+                result.issues.push(layout_issue(retention.region, error));
+                continue;
             }
-            Some(_) => None,
+            RetainReason::PagePreserved
+            | RetainReason::Preserved
+            | RetainReason::BackgroundUnresolved
+            | RetainReason::EraseFailed => continue,
         };
-        if let Some(kind) = kind {
-            result.issues.push(issue(kind, Some(id), None));
-            region.translation = None;
-        }
+        result.issues.push(issue(kind, id, None));
     }
-    for id in preserve_overlapping_originals(&mut record.page) {
-        result.issues.push(issue("overlap", Some(id), None));
+    if let Some(failure) = plan.failure {
+        result.checked = false;
+        result
+            .issues
+            .push(issue("page_error", None, Some(failure.error.to_string())));
     }
-    let anchors = source_anchors(record);
-    loop {
-        match typesetter.text_layers(image, &record.page, LayoutOptions::default(), &anchors) {
-            Ok(layers) => {
-                result.regions = layers
-                    .into_iter()
-                    .map(|layer| LayoutRegion {
-                        region_id: layer.region_id,
-                        font_size: layer.layout.font_size,
-                    })
-                    .collect();
-                break;
-            }
-            Err(LayoutError::Region { id, source }) => {
-                let kind = match source.as_ref() {
-                    LayoutError::NoFit(_) => "no_fit",
-                    LayoutError::MissingGlyph(_) => "missing_glyph",
-                    _ => "typeset_error",
-                };
-                result
-                    .issues
-                    .push(issue(kind, Some(id), Some(source.to_string())));
-                let Some(region) = record
-                    .page
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.block.id == id && r.translation.is_some())
-                else {
-                    result.checked = false;
-                    result.issues.push(issue(
-                        "page_error",
-                        None,
-                        Some("typesetter reported an unknown region".into()),
-                    ));
-                    break;
-                };
-                region.translation = None;
-                for id in preserve_overlapping_originals(&mut record.page) {
-                    result.issues.push(issue("overlap", Some(id), None));
-                }
-            }
-            Err(error) => {
-                result.checked = false;
-                result
-                    .issues
-                    .push(issue("page_error", None, Some(error.to_string())));
-                break;
-            }
-        }
-    }
+    result.regions = plan
+        .rendered
+        .into_iter()
+        .flatten()
+        .map(|layer| LayoutRegion {
+            region_id: layer.region_id,
+            font_size: layer.layout.font_size,
+        })
+        .collect();
     result
 }
 
@@ -175,12 +184,12 @@ pub fn check_layout(project: &Path, font: Option<&Path>, output: &Path, quiet: b
             eprintln!("[{}/{}] check layout {}", i + 1, index.len(), name);
         }
         let page = (|| -> Result<LayoutReportPage> {
-            let mut record: Record = read(&project.join(name))?;
+            let record: Record = read(&project.join(name))?;
             let image = originals.image(&record.source)?;
             if image.dimensions() != (record.page.width, record.page.height) {
                 bail!("source dimensions changed");
             }
-            Ok(inspect_page(name, &mut record, &image, &typesetter))
+            Ok(inspect_page(name, &record, &image, &typesetter))
         })()
         .unwrap_or_else(|error| LayoutReportPage {
             page: name.clone(),
@@ -214,6 +223,8 @@ pub fn check_layout(project: &Path, font: Option<&Path>, output: &Path, quiet: b
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -222,7 +233,7 @@ mod tests {
             return;
         };
         let typesetter = Typesetter::new(&fs::read(font).unwrap()).unwrap();
-        let mut record: Record = serde_json::from_value(json!({
+        let record: Record = serde_json::from_value(json!({
             "source": "example",
             "page": {"width": 100, "height": 100, "regions": [
                 {"block": {"id": 1, "text": "One", "words": [], "bounds": {"x": 1, "y": 1, "width": 5, "height": 5}},
@@ -238,9 +249,8 @@ mod tests {
                      "erase": [], "background": [255,255,255]}, "translation": "Another long sentence"}
             ]}
         })).unwrap();
-        let original = serde_json::to_value(&record).unwrap();
         let image = image::RgbImage::from_pixel(100, 100, image::Rgb([255, 255, 255]));
-        let result = inspect_page("page.json", &mut record, &image, &typesetter);
+        let result = inspect_page("page.json", &record, &image, &typesetter);
         assert!(result.checked);
         assert!(
             result
@@ -259,11 +269,6 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| issue.kind == "no_fit" && issue.region_id == Some(3))
-        );
-        // inspect_page works on the in-memory copy; the original source file remains untouched.
-        assert_eq!(
-            original["page"]["regions"][0]["translation"],
-            "A long sentence"
         );
     }
 }

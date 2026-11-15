@@ -1,6 +1,7 @@
-use super::{Record, read, save, source::ProjectSource};
+use super::{plan::save_edited, read, source::ProjectSource};
 use anyhow::{Context as _, Result, bail, ensure};
-use camel::{Rect, Span, analysis::AnalysisMetadata, geometry, translation::Exchange};
+use camel::{Rect, Span, mask, translation::Exchange};
+use camel_project::{Record, edit};
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::Path};
 
@@ -44,49 +45,12 @@ fn encloses(a: Rect, b: Rect) -> bool {
 fn contains(spans: &[Span], x: u32, y: u32) -> bool {
     spans.iter().any(|s| s.y == y && s.start <= x && x < s.end)
 }
-fn subtract(spans: &[Span], blocked: &[Span]) -> Vec<Span> {
-    let mut out = Vec::new();
-    for s in spans {
-        let mut pieces = vec![(s.start, s.end)];
-        for b in blocked.iter().filter(|b| b.y == s.y) {
-            pieces = pieces
-                .into_iter()
-                .flat_map(|(a, z)| {
-                    let mut v = Vec::new();
-                    if a < b.start {
-                        v.push((a, z.min(b.start)));
-                    }
-                    if z > b.end {
-                        v.push((a.max(b.end), z));
-                    }
-                    v
-                })
-                .filter(|(a, b)| a < b)
-                .collect();
-        }
-        out.extend(
-            pieces
-                .into_iter()
-                .map(|(start, end)| Span { y: s.y, start, end }),
-        );
-    }
-    out
-}
-fn semantic(analysis: &AnalysisMetadata, id: u32, fallback: &str) -> String {
-    analysis
-        .regions
-        .iter()
-        .find(|g| g.region_id == id)
-        .and_then(|g| g.corrected_source.clone())
-        .unwrap_or_else(|| fallback.to_owned())
-}
 
 pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
     let req: Request = read(request_path)?;
     let index: Vec<String> = read(&project.join("index.json"))?;
     ensure!(index.contains(&req.page), "page is not in project index");
-    let path = project.join(&req.page);
-    let mut record: Record = read(&path)?;
+    let mut record: Record = read(&project.join(&req.page))?;
     ensure!(
         record.source == req.source,
         "source reference differs from request"
@@ -172,7 +136,7 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
         .words
         .iter()
         .map(|w| w.bounds)
-        .reduce(|a, b| a.union(b))
+        .reduce(Rect::union)
         .unwrap();
     block.text = block
         .words
@@ -181,74 +145,11 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
         .collect::<Vec<_>>()
         .join(" ");
     let panels: Vec<Rect> = analysis.panels.iter().map(|p| p.bounds).collect();
-    let mut blocks: Vec<_> = record
-        .page
-        .regions
-        .iter()
-        .map(|r| r.block.clone())
-        .collect();
-    blocks.push(block.clone());
-    let hint: Vec<_> = unresolved
+    let hint = unresolved
         .detection_id
         .and_then(|id| analysis.visual_detections.iter().find(|d| d.id == id))
-        .map(|d| vec![(req.region, d.bounds)])
-        .unwrap_or_default();
-    let candidates = geometry::candidates(&image);
-    let recover = |candidates: &[geometry::Candidate]| {
-        geometry::analyze_with_candidates_and_hints(
-            &image,
-            blocks.clone(),
-            &panels,
-            candidates,
-            &hint,
-            &[req.region],
-        )
-        .regions
-        .into_iter()
-        .find(|r| r.block.id == req.region)
-    };
-    let mut region = recover(&candidates).context("geometry did not return region")?;
-    if region.bubble.background_issue.is_some()
-        || region.bubble.interior.is_empty()
-        || region.bubble.erase.is_empty()
-    {
-        let candidates = geometry::candidates_with_colored_text(&image, &blocks, &[req.region]);
-        region = recover(&candidates).context("geometry did not return region")?;
-    }
-    ensure!(
-        region.bubble.background_issue.is_none()
-            && !region.bubble.interior.is_empty()
-            && !region.bubble.erase.is_empty(),
-        "region background or geometry is unresolved"
-    );
-    let occupied: Vec<Span> = record
-        .page
-        .regions
-        .iter()
-        .flat_map(|r| r.bubble.erase.iter().copied())
-        .collect();
-    if region.bubble.background_repair.is_some() {
-        ensure!(
-            region.bubble.erase.iter().all(|s| !occupied
-                .iter()
-                .any(|o| s.y == o.y && s.start < o.end && o.start < s.end)),
-            "local repair overlaps existing erase mask"
-        );
-    } else {
-        region.bubble.erase = subtract(&region.bubble.erase, &occupied);
-    }
-    let occupied_layout: Vec<Span> = record
-        .page
-        .regions
-        .iter()
-        .flat_map(|r| r.bubble.interior.iter().copied())
-        .chain(occupied.iter().copied())
-        .collect();
-    region.bubble.interior = subtract(&region.bubble.interior, &occupied_layout);
-    ensure!(
-        !region.bubble.erase.is_empty() && !region.bubble.interior.is_empty(),
-        "region is covered by existing geometry"
-    );
+        .map(|d| d.bounds);
+    let mut region = mask::fit_block(&image, &record.page.regions, &panels, block.clone(), hint)?;
     // Every dark pixel in a target word must be erased, and every dark pixel erased
     // must belong to a confirmed word. Neighbouring or unidentified ink is rejected.
     let within_word = |x: u32, y: u32| {
@@ -286,7 +187,6 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
     }
     let mut target_source = block.text.clone();
     if let Some(split) = &req.split {
-        let a = record.analysis.as_ref().unwrap();
         let old = record
             .page
             .regions
@@ -294,16 +194,16 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
             .find(|r| r.block.id == split.region)
             .context("split region not found")?;
         ensure!(
-            semantic(a, split.region, &old.block.text) == split.original_source
+            edit::context_source(record.analysis.as_ref(), old) == split.original_source
                 && old.translation.as_deref() == Some(&split.original_translation),
             "split region changed"
         );
-        target_source = split
+        split
             .original_source
             .strip_prefix(&split.remaining_source)
             .context("remaining source is not a prefix")?
             .trim_start()
-            .to_owned();
+            .clone_into(&mut target_source);
         let target = split
             .original_translation
             .strip_prefix(&split.remaining_translation)
@@ -314,17 +214,7 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
             "split text does not match original translation"
         );
     }
-    let mut geometry = AnalysisMetadata::with_panels(
-        &panels,
-        Vec::new(),
-        &camel::Page {
-            width: record.page.width,
-            height: record.page.height,
-            regions: vec![region.clone()],
-        },
-    )
-    .regions
-    .remove(0);
+    let mut geometry = edit::new_geometry(&panels, &region, &record.page);
     geometry.corrected_source = Some(target_source.clone());
     let split_speaker = req
         .split
@@ -339,45 +229,34 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
                 .find(|g| g.region_id == s.region)
         })
         .and_then(|g| g.speaker.clone());
-    geometry.speaker = split_speaker.clone();
-    let mut exchanges = record.context.as_ref().map(|c| c.recent.clone());
-    if let Some(recent) = exchanges.as_mut() {
-        if let Some(split) = &req.split {
-            let matches: Vec<_> = recent
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| {
-                    e.source == split.original_source && e.target == split.original_translation
-                })
-                .map(|(i, _)| i)
-                .collect();
-            if let [i] = matches.as_slice() {
-                recent[*i].source = split.remaining_source.clone();
-                recent[*i].target = split.remaining_translation.clone();
-            } else if !matches.is_empty() {
-                bail!("ambiguous split context");
-            }
-        }
-        let analysis = record.analysis.as_ref().unwrap();
-        let position = record.page.regions[insertion..].iter().find_map(|r| {
-            let text = semantic(analysis, r.block.id, &r.block.text);
-            recent
-                .iter()
-                .position(|e| e.source == text && Some(&e.target) == r.translation.as_ref())
-        });
-        if let Some(i) =
-            position.or_else(|| (insertion == record.page.regions.len()).then_some(recent.len()))
-        {
-            recent.insert(
-                i,
-                Exchange {
-                    source: target_source.clone(),
-                    target: req.translation.clone(),
-                    speaker: split_speaker,
-                },
-            );
+    geometry.speaker.clone_from(&split_speaker);
+    if let (Some(split), Some(context)) = (&req.split, &mut record.context) {
+        let matches: Vec<_> = context
+            .recent
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                e.source == split.original_source && e.target == split.original_translation
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if let [i] = matches.as_slice() {
+            let exchange = &mut context.recent[*i];
+            exchange.source.clone_from(&split.remaining_source);
+            exchange.target.clone_from(&split.remaining_translation);
+        } else if !matches.is_empty() {
+            bail!("ambiguous split context");
         }
     }
+    edit::remember_inserted(
+        &mut record,
+        insertion,
+        Exchange {
+            source: target_source,
+            target: req.translation.clone(),
+            speaker: split_speaker,
+        },
+    );
     if let Some(split) = &req.split {
         let old = record
             .page
@@ -398,43 +277,10 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
         record.translation_models.remove(&split.region);
     }
     region.translation = Some(req.translation);
-    record.page.regions.insert(insertion, region);
-    let analysis = record.analysis.as_mut().unwrap();
-    analysis.regions.push(geometry);
-    analysis
-        .unresolved_regions
-        .retain(|r| r.block.id != req.region);
-    let issue = format!(
-        "unresolved text at {},{}: {}",
-        unresolved.block.bounds.x, unresolved.block.bounds.y, unresolved.reason
-    );
-    record.issues.retain(|i| i != &issue);
-    if record.translated_source.is_some() {
-        record.translated_source = Some(
-            record
-                .page
-                .regions
-                .iter()
-                .map(|r| (r.block.id, r.block.text.clone()))
-                .collect(),
-        );
-    }
-    if let (Some(c), Some(recent)) = (record.context.as_mut(), exchanges) {
-        c.recent.clear();
-        for e in recent {
-            c.remember_with_speaker(e.source, e.target, e.speaker);
-        }
-        c.scene_summary = None;
-    }
-    record.summary_invalidated = true;
-    let plan = super::plan::repaired_plan(project, &req.page, &record)?;
-    save(&path, &record, true)?;
-    if let Some(plan) = plan {
-        super::plan::save_repaired_plan(project, &plan).context(
-            "page repaired but translation plan update failed; the stale plan will be rejected",
-        )?;
-    }
-    Ok(())
+    edit::insert_region(&mut record, insertion, region, geometry);
+    edit::resolve_unresolved(&mut record, req.region);
+    edit::finish(&mut record, true);
+    save_edited(project, &req.page, &record, true)
 }
 
 /// Removes a reviewed false region while retaining the initial OCR evidence.
@@ -442,56 +288,22 @@ pub fn remove_region(project: &Path, request_path: &Path) -> Result<()> {
     let req: RemoveRequest = read(request_path)?;
     let index: Vec<String> = read(&project.join("index.json"))?;
     ensure!(index.contains(&req.page), "page is not in project index");
-    let path = project.join(&req.page);
-    let mut record: Record = read(&path)?;
+    let mut record: Record = read(&project.join(&req.page))?;
     ensure!(
         record.source == req.source,
         "source reference differs from request"
     );
-    let position = record
+    let region = record
         .page
         .regions
         .iter()
-        .position(|r| r.block.id == req.region)
+        .find(|r| r.block.id == req.region)
         .context("region not found")?;
-    let region = &record.page.regions[position];
     ensure!(
         region.block.text == req.original_text,
         "region source differs from request"
     );
-    let source = record
-        .analysis
-        .as_ref()
-        .map(|analysis| semantic(analysis, req.region, &region.block.text))
-        .unwrap_or_else(|| region.block.text.clone());
-    let translation = region.translation.clone();
-    record.page.regions.remove(position);
-    if let Some(analysis) = &mut record.analysis {
-        analysis.regions.retain(|r| r.region_id != req.region);
-    }
-    record.preserved_regions.remove(&req.region);
-    record.translation_models.remove(&req.region);
-    if let Some(snapshot) = &mut record.translated_source {
-        snapshot.retain(|(id, _)| *id != req.region);
-    }
-    if let Some(context) = &mut record.context {
-        if let Some(target) = translation
-            && let Some(position) = context
-                .recent
-                .iter()
-                .rposition(|e| e.source == source && e.target == target)
-        {
-            context.recent.remove(position);
-        }
-        context.scene_summary = None;
-    }
-    record.summary_invalidated = true;
-    let plan = super::plan::repaired_plan(project, &req.page, &record)?;
-    save(&path, &record, true)?;
-    if let Some(plan) = plan {
-        super::plan::save_repaired_plan(project, &plan).context(
-            "region removed but translation plan update failed; the stale plan will be rejected",
-        )?;
-    }
-    Ok(())
+    edit::remove_region(&mut record, req.region)?;
+    edit::finish(&mut record, true);
+    save_edited(project, &req.page, &record, true)
 }

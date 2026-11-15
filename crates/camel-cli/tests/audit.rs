@@ -51,6 +51,10 @@ fn run_audit(project: &Path, output: &Path, url: &str) -> std::process::Output {
         .output()
         .unwrap()
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "replies are built inline by callers"
+)]
 fn respond(request: tiny_http::Request, body: Value) {
     let payload =
         json!({"choices":[{"finish_reason":"stop","message":{"content":body.to_string()}}]})
@@ -301,7 +305,7 @@ fn concurrent_audit_processes_append_complete_metrics_records() {
             }
             let barrier = std::sync::Arc::new(std::sync::Barrier::new(PROCESSES));
             let workers: Vec<_> = requests.into_iter().map(|request| {
-            let barrier = barrier.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
             thread::spawn(move || {
                 let details: serde_json::Map<String, Value> = (0..100)
                     .map(|i| (format!("detail_{i}"), json!(i)))

@@ -1,18 +1,20 @@
 [package]
 name = "camel-vision"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.94"
-publish = false
+description = "Local comic text detection and recognition for camel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
-camel = { path = "../.." }
-image = { version = "0.25.10", default-features = false }
-rten = { version = "0.26.0", default-features = false, features = ["onnx_format"] }
-thiserror = "2"
+camel.workspace = true
+image.workspace = true
+rten = { workspace = true, features = ["onnx_format"] }
+thiserror = { workspace = true, features = ["std"] }
 
 [dev-dependencies]
-serde_json = "1"
+serde_json = { workspace = true, features = ["std"] }
 
-[lints.rust]
-unsafe_code = "forbid"
+[lints]
+workspace = true

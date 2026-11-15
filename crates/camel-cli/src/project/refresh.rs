@@ -255,7 +255,7 @@ mod tests {
             page,
             summary_invalidated: false,
             preserve_original: false,
-            preserved_regions: Default::default(),
+            preserved_regions: std::collections::BTreeSet::default(),
             context: Some(Context::default()),
             service: None,
             translation_models: BTreeMap::from([(1, "model".into())]),
@@ -363,7 +363,7 @@ mod tests {
             fs::write(folder.join("sources/00001.jpg"), b"source image").unwrap();
             save(
                 &folder.join("source.json"),
-                &super::super::source::SourceManifest {
+                &camel_project::source::SourceManifest {
                     path: folder.join("sources"),
                 },
                 false,
@@ -375,13 +375,13 @@ mod tests {
             region(1, "YES", 10, Some("是")),
             region(2, "OLD", 100, Some("旧")),
         ]));
-        old_record.source = super::super::source::page_reference(0, b"source image");
+        old_record.source = camel_project::source::page_reference(0, b"source image");
         save(&old.join("00001.json"), &old_record, false).unwrap();
         let mut new_record = record(page(vec![
             region(8, "YES", 10, None),
             region(9, "NEW", 100, None),
         ]));
-        new_record.source = super::super::source::page_reference(0, b"source image");
+        new_record.source = camel_project::source::page_reference(0, b"source image");
         new_record.context = None;
         new_record.translated_source = None;
         save(&new.join("00001.json"), &new_record, false).unwrap();

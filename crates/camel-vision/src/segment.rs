@@ -28,6 +28,10 @@ impl Ink {
         Self::with_projection(image, bounds, true)
     }
 
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "x/y and r/g/b are conventional pixel coordinate and channel names"
+    )]
     fn with_projection(image: &RgbImage, bounds: Rect, force_luminance: bool) -> Self {
         let domain = bounds;
         let margin = (bounds.width.min(bounds.height) / 2).clamp(4, 32);
@@ -103,6 +107,10 @@ impl Ink {
         self.pixels[((y - self.bounds.y) * self.bounds.width + x - self.bounds.x) as usize]
     }
 
+    #[expect(
+        clippy::many_single_char_names,
+        reason = "x/y and l/r/t/b are conventional pixel-coordinate and edge names"
+    )]
     pub fn lines(&mut self) -> Vec<Rect> {
         let width = self.bounds.width as usize;
         let height = self.bounds.height as usize;
@@ -148,8 +156,8 @@ impl Ink {
             }
             // Read beyond the detector box so a clipped balloon outline can be
             // identified by its connection to the crop boundary.
-            let cx = self.bounds.x + ((l + r) / 2) as u32;
-            let cy = self.bounds.y + ((t + b) / 2) as u32;
+            let cx = self.bounds.x + usize::midpoint(l, r) as u32;
+            let cy = self.bounds.y + usize::midpoint(t, b) as u32;
             if queue.len() >= 3
                 && l > 0
                 && t > 0
@@ -477,9 +485,9 @@ impl Ink {
             seeds.push(seed);
             let mut top = component.y;
             for (i, &(index, center)) in anchors.iter().enumerate() {
-                let bottom = anchors
-                    .get(i + 1)
-                    .map_or(component.bottom(), |next| ((center + next.1) / 2.0) as u32);
+                let bottom = anchors.get(i + 1).map_or(component.bottom(), |next| {
+                    f64::midpoint(center, next.1) as u32
+                });
                 if let Some(part) = self.tighten(Rect {
                     y: top,
                     height: bottom.saturating_sub(top),
@@ -698,12 +706,12 @@ impl Ink {
         self.flood_background(seen, queue);
     }
 
-    fn touches_paper(&self, seed: usize, seen: &mut [bool], queue: &mut Vec<usize>) -> bool {
+    fn touches_paper(&self, start: usize, seen: &mut [bool], queue: &mut Vec<usize>) -> bool {
         let width = self.bounds.width as usize;
         let height = self.bounds.height as usize;
         queue.clear();
-        queue.push(seed);
-        seen[seed] = true;
+        queue.push(start);
+        seen[start] = true;
         let mut head = 0;
         while head < queue.len() {
             let i = queue[head];
@@ -769,8 +777,7 @@ impl Ink {
         self.reading
             .iter()
             .find(|(source, _)| *source == line)
-            .map(|(_, crop)| *crop)
-            .unwrap_or(line)
+            .map_or(line, |(_, crop)| *crop)
     }
 
     /// Return the horizontal offset for mapping CTC intervals back to source pixels.
@@ -941,7 +948,7 @@ impl Ink {
     }
 }
 
-fn flood_paper(mask: &mut [u8], width: usize, queue: &mut Vec<usize>, mark: u8) {
+fn flood_paper(mask: &mut [u8], width: usize, queue: &mut Vec<usize>, label: u8) {
     let height = mask.len() / width;
     let mut head = 0;
     while head < queue.len() {
@@ -958,7 +965,7 @@ fn flood_paper(mask: &mut [u8], width: usize, queue: &mut Vec<usize>, mark: u8) 
         .flatten()
         {
             if mask[next] == 0 {
-                mask[next] = mark;
+                mask[next] = label;
                 queue.push(next);
             }
         }
@@ -1853,8 +1860,8 @@ mod tests {
     #[test]
     fn outlined_oval_is_not_a_rectangular_caption_frame() {
         let image = RgbImage::from_fn(120, 100, |x, y| {
-            let dx = (x as f64 - 60.) / 40.;
-            let dy = (y as f64 - 49.) / 29.;
+            let dx = (f64::from(x) - 60.) / 40.;
+            let dy = (f64::from(y) - 49.) / 29.;
             let r = dx * dx + dy * dy;
             let outline = (0.8..=1.).contains(&r);
             let letters = [45, 58, 71]
@@ -1888,10 +1895,10 @@ mod tests {
                         .iter()
                         .any(|&(a, b)| (a..b).contains(&x))
                         && [28, 45, 62].iter().any(|&top| (top..top + 12).contains(&y));
-                    Rgb([if (frame || letter) != inverted {
-                        0
-                    } else {
+                    Rgb([if (frame || letter) == inverted {
                         255
+                    } else {
+                        0
                     }; 3])
                 });
                 let bounds = Rect {

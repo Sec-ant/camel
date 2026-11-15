@@ -1,0 +1,19 @@
+[package]
+name = "camel-project"
+description = "Camel project file formats and pure page operations shared by the CLI and the web workbench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+camel.workspace = true
+image.workspace = true
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true, features = ["std"] }
+sha2.workspace = true
+thiserror = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

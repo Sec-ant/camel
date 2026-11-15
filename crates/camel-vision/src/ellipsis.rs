@@ -63,7 +63,7 @@ pub(crate) fn is_ellipsis(image: &RgbImage, line: Rect) -> bool {
         if bottom - top + 1 > max_width * 3 {
             return false;
         }
-        centers.push((top + bottom) as i64);
+        centers.push(i64::from(top + bottom));
     }
     centers.iter().max().unwrap() - centers.iter().min().unwrap() <= i64::from(line.height)
 }

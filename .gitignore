@@ -1,2 +1,4 @@
 /target
-crates/camel-cli/reader-ui/node_modules/
+web/node_modules/
+web/dist/
+web/src/wasm/

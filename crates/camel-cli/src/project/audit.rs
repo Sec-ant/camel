@@ -131,7 +131,7 @@ fn input_page<'a>(name: &'a str, record: &'a Record, targets_only: bool) -> Inpu
 fn audit_input(
     pages: &[(String, Record)],
     range: std::ops::Range<usize>,
-    summary: &Option<String>,
+    summary: Option<&str>,
     glossary: &BTreeMap<String, String>,
     language: &str,
     translation_policy: Option<&str>,
@@ -250,7 +250,7 @@ fn make_tasks(
                 let candidate = audit_input(
                     pages,
                     start..end,
-                    summary,
+                    summary.as_deref(),
                     glossary,
                     language,
                     translation_policy,
@@ -486,6 +486,10 @@ fn failure_details(failures: &[AuditFailure]) -> String {
         .join("\n")
 }
 
+#[expect(
+    clippy::unnecessary_debug_formatting,
+    reason = "the quoted path is pasted into a shell command"
+)]
 fn retry_guidance(output: &Path, failures: &[AuditFailure]) -> String {
     format!(
         "{} audit groups were not completed:\n{}\nPartial report: {}\nTo retry validation and temporary service failures, rerun the same command with -o {:?}; completed groups and content-filter decisions are reused. The existing report is retained.",
@@ -496,7 +500,7 @@ fn retry_guidance(output: &Path, failures: &[AuditFailure]) -> String {
     )
 }
 
-fn scene_summary(scene: &super::plan::Scene, skip_pages: &[String]) -> Option<String> {
+fn scene_summary(scene: &camel_project::plan::Scene, skip_pages: &[String]) -> Option<String> {
     if scene.pages.iter().any(|page| skip_pages.contains(page)) {
         None
     } else {
@@ -504,6 +508,12 @@ fn scene_summary(scene: &super::plan::Scene, skip_pages: &[String]) -> Option<St
     }
 }
 
+struct Dispatch {
+    next: usize,
+    stopped: bool,
+    blocked_pages: BTreeSet<String>,
+    blocked_summaries: BTreeSet<String>,
+}
 pub fn audit(
     project: &Path,
     service: &Service,
@@ -588,12 +598,6 @@ pub fn audit(
             Ok(remote)
         })
         .collect::<Result<Vec<_>>>()?;
-    struct Dispatch {
-        next: usize,
-        stopped: bool,
-        blocked_pages: BTreeSet<String>,
-        blocked_summaries: BTreeSet<String>,
-    }
     let mut blocked_pages = BTreeSet::new();
     let mut blocked_summaries = BTreeSet::new();
     let cached_filter: Vec<_> = tasks
@@ -721,7 +725,6 @@ pub fn audit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use camel::translation::TranslationError;
     use serde_json::json;
 
     struct Reply(&'static str);
@@ -808,12 +811,10 @@ mod tests {
     fn rejects_unchanged_and_oversized_suggestions() {
         let expected = BTreeMap::from([(("00001.json", 7), "已经好了。")]);
         let issue = json!({"page":"00001.json","id":7,"original_translation":"已经好了。","category":"meaning","severity":"major","evidence":"Not yet.","reason":"Wrong meaning.","suggestion":"已经好了。"});
-        assert!(
-            validate_response(&json!({"issues":[issue.clone()]}).to_string(), &expected).is_err()
-        );
+        validate_response(&json!({"issues":[issue.clone()]}).to_string(), &expected).unwrap_err();
         let mut long = issue;
         long["suggestion"] = json!("字".repeat(4097));
-        assert!(validate_response(&json!({"issues":[long]}).to_string(), &expected).is_err());
+        validate_response(&json!({"issues":[long]}).to_string(), &expected).unwrap_err();
     }
 
     #[test]
@@ -834,7 +835,7 @@ mod tests {
     }
     #[test]
     fn omitted_scene_summary_cannot_restate_skipped_pages() {
-        let scene = super::super::plan::Scene {
+        let scene = camel_project::plan::Scene {
             pages: vec![
                 "00008.json".into(),
                 "00009.json".into(),

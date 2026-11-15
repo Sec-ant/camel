@@ -75,6 +75,10 @@ fn server(replies: Vec<Value>) -> (String, JoinHandle<Vec<Request>>) {
 
 type HttpReply = (u16, Vec<(String, String)>, Value);
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "replies are built inline by callers"
+)]
 fn completion(reply: Value) -> HttpReply {
     (
         200,
@@ -163,17 +167,9 @@ fn project(sources: &[(u32, &str)]) -> TempDir {
             }
         }
         image.save(dir.path().join(&source)).unwrap();
-        let hash = ring::digest::digest(
-            &ring::digest::SHA256,
-            &fs::read(dir.path().join(&source)).unwrap(),
-        );
-        let source = format!(
-            "@{}:{}",
+        let source = camel_project::source::page_reference(
             number,
-            hash.as_ref()
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
+            &fs::read(dir.path().join(&source)).unwrap(),
         );
         let interior: Vec<_> = (10..110).map(|y| json!([y, 10, 190])).collect();
         let erase: Vec<_> = (20..30).map(|y| json!([y, 20, 40])).collect();
@@ -198,14 +194,7 @@ fn refresh_source_reference(dir: &Path) {
     let path = dir.join("00001.json");
     let mut record = read_record(&path);
     let bytes = fs::read(dir.join("sources/00001.png")).unwrap();
-    let hash = ring::digest::digest(&ring::digest::SHA256, &bytes);
-    record["source"] = json!(format!(
-        "@0:{}",
-        hash.as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect::<String>()
-    ));
+    record["source"] = json!(camel_project::source::page_reference(0, &bytes));
     write_record(&path, &record);
 }
 
@@ -2384,9 +2373,10 @@ fn erase_rejects_mask_directory_aliasing_clean_output() {
 #[test]
 #[ignore = "requires a Chinese font; set CAMEL_TEST_FONT"]
 fn translates_then_renders_preserving_pixels_outside_the_bubble() {
-    let font = std::env::var_os("CAMEL_TEST_FONT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/System/Library/Fonts/Supplemental/Songti.ttc"));
+    let font = std::env::var_os("CAMEL_TEST_FONT").map_or_else(
+        || PathBuf::from("/System/Library/Fonts/Supplemental/Songti.ttc"),
+        PathBuf::from,
+    );
     assert!(
         font.is_file(),
         "set CAMEL_TEST_FONT to a Chinese TTF, OTF, or TTC"
@@ -2467,9 +2457,10 @@ fn translates_then_renders_preserving_pixels_outside_the_bubble() {
 #[test]
 #[ignore = "requires a Chinese font; set CAMEL_TEST_FONT"]
 fn partial_render_keeps_missing_and_overlapping_dialogue_but_renders_other_pages() {
-    let font = std::env::var_os("CAMEL_TEST_FONT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/System/Library/Fonts/Supplemental/Songti.ttc"));
+    let font = std::env::var_os("CAMEL_TEST_FONT").map_or_else(
+        || PathBuf::from("/System/Library/Fonts/Supplemental/Songti.ttc"),
+        PathBuf::from,
+    );
     let dir = project(&[
         (7, "Missing"),
         (29, "Translated"),
