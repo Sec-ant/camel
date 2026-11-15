@@ -18,6 +18,22 @@ extern "C" {
 
     #[wasm_bindgen(method, catch, js_name = readAt)]
     fn read_at(this: &ComicReader, offset: f64, length: u32) -> Result<Vec<u8>, JsValue>;
+
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+
+/// Installs the panic hook when the module is instantiated. Release builds
+/// abort on panic, which JavaScript would only see as an `unreachable` trap;
+/// the hook logs the panic message and throws it as an `Error` instead. The
+/// module state is then undefined, so the worker must not call it again.
+#[wasm_bindgen(start)]
+fn start() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = format!("camel-web panicked: {info}");
+        console_error(&message);
+        wasm_bindgen::throw_str(&message);
+    }));
 }
 
 thread_local! {

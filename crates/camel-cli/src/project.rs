@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read},
     path::{Path, PathBuf},
 };
 
@@ -8,7 +8,6 @@ use anyhow::{Context as _, Result};
 use camel_project::{Record, hex, to_json_bytes};
 use serde::Serialize;
 use sha2::Digest as _;
-use tempfile::NamedTempFile;
 
 mod analyze;
 pub use analyze::analyze;
@@ -66,9 +65,7 @@ pub(crate) fn save<T: Serialize>(path: &Path, value: &T, replace: bool) -> Resul
 
 /// Writes a synced temporary file next to `path`, then renames it into place.
 pub(crate) fn write_atomic(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
-    let mut file = NamedTempFile::new_in(path.parent().context("output has no parent")?)?;
-    file.write_all(bytes)?;
-    file.as_file_mut().sync_all()?;
+    let file = crate::files::stage(path.parent().context("output has no parent")?, bytes)?;
     if replace {
         file.persist(path)?;
     } else {

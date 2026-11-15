@@ -3,7 +3,7 @@
     reason = "the test transport answers without waiting"
 )]
 
-use camel::translation::{Context, TranslationError, Translator, translate_page};
+use camel::translation::{Context, TranslationError, Translator, translate_missing_page};
 use camel::{Bubble, Page, Rect, Region, TextBlock};
 use futures::executor::block_on;
 use std::collections::BTreeMap;
@@ -50,9 +50,9 @@ fn model_term_explanations_preserve_translation_and_confirmed_names() {
     context
         .confirm_terms(&BTreeMap::from([("Mark".into(), "马克".into())]))
         .unwrap();
-    let conflicts = block_on(translate_page(
+    let conflicts = block_on(translate_missing_page(
         &Reply(r#"{"translations":[{"id":1,"text":"你好，马克！"}],"terms":[{"source":"Mark","target":"马可","note":"alternate spelling"},{"source":"Eve","target":"伊芙","note":"character"}]}"#),
-        &mut page, None, &mut context, "zh-CN",
+        &mut page, None, &mut context, "zh-CN", None, None,
     )).unwrap();
     assert_eq!(page.regions[0].translation.as_deref(), Some("你好，马克！"));
     assert_eq!(context.glossary["Mark"], "马克");
@@ -77,12 +77,14 @@ fn invalid_terms_and_region_ids_are_still_rejected_atomically() {
         let mut page = page();
         let mut context = Context::default();
         assert!(
-            block_on(translate_page(
+            block_on(translate_missing_page(
                 &Reply(raw),
                 &mut page,
                 None,
                 &mut context,
-                "zh-CN"
+                "zh-CN",
+                None,
+                None
             ))
             .is_err(),
             "{raw}"

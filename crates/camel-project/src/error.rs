@@ -46,6 +46,28 @@ pub enum Error {
     /// The operation stopped because the user cancelled it.
     #[error("cancelled")]
     Cancelled,
+    /// A translated page's dialogue no longer matches the source its
+    /// translation checkpoint was made from.
+    #[error("{page} source dialogue differs from its translation checkpoint")]
+    CheckpointSourceMismatch {
+        /// The page record as the host names it.
+        page: String,
+    },
+    /// A page's translation checkpoint was made with another service, model,
+    /// language or visual mode, so it cannot be resumed with these settings.
+    #[error(
+        "{page} was translated with another model, endpoint, language or visual mode; use --text-only for text checkpoints"
+    )]
+    IncompatibleCheckpoint {
+        /// The page record as the host names it.
+        page: String,
+    },
+    /// The original page image no longer has the dimensions it was analyzed at.
+    #[error("{page} source image dimensions differ from the analyzed page")]
+    DimensionsChanged {
+        /// The page record as the host names it.
+        page: String,
+    },
     /// Any other failure, described for the user.
     #[error("{0}")]
     Message(String),

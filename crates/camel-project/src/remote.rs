@@ -21,6 +21,31 @@ const METRICS_FILE: &str = "translation-metrics.jsonl";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const RETRY_POLL: Duration = Duration::from_millis(100);
 
+/// A translation service API key. `Debug` output never shows it.
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(transparent)]
+pub struct ApiKey(String);
+
+impl ApiKey {
+    /// Wraps a key.
+    #[must_use]
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    /// The key itself, for the request that needs it.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ApiKey(<redacted>)")
+    }
+}
+
 /// The translation service and how to use it.
 #[derive(Clone, Debug)]
 pub struct Service {
@@ -42,7 +67,7 @@ pub struct Service {
     pub variables: BTreeMap<String, String>,
     /// The API key, or why it is unavailable. The reason is reported only
     /// when an operation actually needs to call the service.
-    pub api_key: Result<String, String>,
+    pub api_key: Result<ApiKey, String>,
 }
 
 /// Settings shared by every request of one operation.
@@ -51,7 +76,7 @@ pub(crate) struct Client {
     endpoint: String,
     model: String,
     fallback_model: Option<String>,
-    key: String,
+    key: ApiKey,
     request_options: BTreeMap<String, Value>,
     prompt: Option<String>,
     variables: BTreeMap<String, String>,
@@ -61,8 +86,12 @@ pub(crate) struct Client {
 
 impl Client {
     pub(crate) fn new(service: &Service, cache: bool, prompt: Option<&str>) -> Result<Self, Error> {
-        let key = service.api_key.clone().map_err(Error::Message)?;
-        if key.trim().is_empty() {
+        let key = service
+            .api_key
+            .as_ref()
+            .map_err(|reason| Error::Message(reason.clone()))?;
+        let key = key.expose().trim();
+        if key.is_empty() {
             return crate::error::fail("API key is empty");
         }
         Ok(Self {
@@ -76,7 +105,7 @@ impl Client {
                 .as_ref()
                 .filter(|model| *model != &service.model)
                 .cloned(),
-            key: key.trim().into(),
+            key: ApiKey::new(key),
             request_options: service.request_options.clone(),
             prompt: prompt.map(str::to_owned),
             variables: service.variables.clone(),
@@ -108,7 +137,7 @@ impl Client {
         self.cache.then(|| {
             format!(
                 "{CACHE_DIRECTORY}/{}.json",
-                cache_key(&self.endpoint, &self.key, payload)
+                cache_key(&self.endpoint, self.key.expose(), payload)
             )
         })
     }
@@ -393,10 +422,13 @@ impl<'a, H: Host> Remote<'a, H> {
         });
         let mut line = serde_json::to_vec(&entry).expect("metrics entry is JSON");
         line.push(b'\n');
-        self.host
-            .append(METRICS_FILE, &line)
-            .await
-            .map_err(|error| Failure::fatal(format!("write translation metrics: {error}")))?;
+        // The response is already paid for; losing its metrics line must not lose it.
+        if let Err(error) = self.host.append(METRICS_FILE, &line).await {
+            self.host.report(Event::Warning {
+                page: None,
+                message: format!("could not write translation metrics: {error}"),
+            });
+        }
         self.host.report(Event::Request {
             model: model.into(),
             attempt,
@@ -442,7 +474,10 @@ impl<'a, H: Host> Remote<'a, H> {
             .http(HttpRequest {
                 url: client.endpoint.clone(),
                 headers: vec![
-                    ("Authorization".into(), format!("Bearer {}", client.key)),
+                    (
+                        "Authorization".into(),
+                        format!("Bearer {}", client.key.expose()),
+                    ),
                     (
                         "Content-Type".into(),
                         "application/json; charset=utf-8".into(),

@@ -16,7 +16,6 @@ use crate::{
     check_layout::word_break_hints,
     error::{Error, fail},
     host::{Event, ExportAction, Host, HostError, PageSource},
-    is_content_filter_issue,
     render::{RetainReason, native_glyph_masks, overlaps_original, plan_page},
     store::{page_image, read_json},
     to_json_bytes,
@@ -322,7 +321,7 @@ pub async fn render(
         if record.preserve_original {
             let image = page_image(pages, &record.source)?;
             if image.dimensions() != (record.page.width, record.page.height) {
-                return fail(format!("{name} source dimensions changed"));
+                return Err(Error::DimensionsChanged { page: name.clone() });
             }
             write_image(sink, archive.as_mut(), i, &image).await?;
             if filtered {
@@ -332,11 +331,11 @@ pub async fn render(
                     issues: record
                         .issues
                         .iter()
-                        .filter(|issue| is_content_filter_issue(issue))
+                        .filter(|issue| issue.is_content_filter())
                         .map(|issue| RenderIssue {
                             kind: "content_filter",
                             region_id: None,
-                            detail: Some(issue.clone()),
+                            detail: Some(issue.to_string()),
                         })
                         .collect(),
                 });
@@ -354,19 +353,19 @@ pub async fn render(
             .issues
             .iter()
             .map(|issue| RenderIssue {
-                kind: if is_content_filter_issue(issue) {
+                kind: if issue.is_content_filter() {
                     "content_filter"
                 } else {
                     "source_issue"
                 },
                 region_id: None,
-                detail: Some(issue.clone()),
+                detail: Some(issue.to_string()),
             })
             .collect();
         for issue in &record.issues {
             host.report(Event::Warning {
                 page: Some(name.clone()),
-                message: issue.clone(),
+                message: issue.to_string(),
             });
         }
         let has_missing = record.page.regions.iter().any(|region| {
@@ -548,7 +547,7 @@ pub async fn erase(
         let record: Record = read_json(host, name).await?;
         let mut image = page_image(pages, &record.source)?;
         if image.dimensions() != (record.page.width, record.page.height) {
-            return fail(format!("{name} source dimensions changed"));
+            return Err(Error::DimensionsChanged { page: name.clone() });
         }
         let filename = image_name(i);
         let preserve_page = record.preserve_original;
@@ -566,7 +565,11 @@ pub async fn erase(
         let mut issues = if record.preserve_original && !record.has_content_filter() {
             Vec::new()
         } else {
-            record.issues.clone()
+            record
+                .issues
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
         };
         for (region, skip) in record.page.regions.iter().zip(&skipped) {
             if *skip && !preserve_page && !record.preserved_regions.contains(&region.block.id) {

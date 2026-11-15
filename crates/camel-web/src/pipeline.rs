@@ -8,9 +8,9 @@
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
 
 use camel_project::{
-    Service,
+    ApiKey, Service,
     analyze::{AnalysisSource, AnalysisState},
-    error::chain,
+    chain,
     export::{ExportFile, ExportFileKind, ExportFormat, ExportSink, RenderOptions},
     host::{Event, Host, HostError, HttpRequest, HttpResponse, PageSource, Projects, WriteMode},
     source::SourceManifest,
@@ -444,7 +444,7 @@ struct ServiceOptions {
     base_url: String,
     model: String,
     fallback_model: Option<String>,
-    api_key: String,
+    api_key: ApiKey,
     target_language: String,
     text_only: bool,
     prompt: Option<String>,
@@ -454,7 +454,7 @@ struct ServiceOptions {
 
 impl From<ServiceOptions> for Service {
     fn from(options: ServiceOptions) -> Self {
-        let key = options.api_key.trim().to_owned();
+        let key = options.api_key.expose().trim();
         Self {
             base_url: options.base_url,
             model: options.model,
@@ -467,7 +467,7 @@ impl From<ServiceOptions> for Service {
             api_key: if key.is_empty() {
                 Err("set the API key in Settings".into())
             } else {
-                Ok(key)
+                Ok(ApiKey::new(key))
             },
         }
     }

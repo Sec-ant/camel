@@ -3,7 +3,7 @@
 use std::{
     fs,
     io::{self, Write as _},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicBool, Ordering},
@@ -16,7 +16,8 @@ use camel_project::host::{
     Event, ExportAction, Host, HostError, HttpRequest, HttpResponse, PageTask, Projects, WriteMode,
 };
 use futures::channel::oneshot;
-use tempfile::NamedTempFile;
+
+use crate::files;
 
 /// A project directory as a pipeline [`Host`]: atomic file replacement,
 /// blocking HTTP on helper threads and progress on standard error.
@@ -46,24 +47,70 @@ impl FsHost {
         &self.console
     }
 
-    fn path(&self, path: &str) -> PathBuf {
-        self.root.join(path)
+    /// The file a project-relative path names. Paths come from project files
+    /// such as `index.json`, so anything that could leave the project — an
+    /// absolute path, `..`, `.` or an empty component — is rejected.
+    fn path(&self, path: &str) -> Result<PathBuf, HostError> {
+        let inside = path.split('/').all(|part| {
+            let mut components = Path::new(part).components();
+            matches!(
+                (components.next(), components.next()),
+                (Some(Component::Normal(_)), None)
+            )
+        });
+        if inside {
+            Ok(self.root.join(path))
+        } else {
+            Err(HostError::Io(format!(
+                "{path:?} is not a relative path inside the project {}",
+                self.root.display()
+            )))
+        }
     }
 
     fn io_error(&self, path: &str, error: &io::Error) -> HostError {
         HostError::Io(format!("{}: {error}", self.locate(path)))
     }
+
+    /// Holds an advisory lock on the project directory, so `camel` processes
+    /// that check a revision and then replace the file do so one at a time.
+    /// Writers that ignore the lock, such as editors, are not held off.
+    /// `None` where the filesystem has no locks.
+    #[cfg(unix)]
+    fn lock_project(&self) -> io::Result<Option<fs::File>> {
+        let root = fs::File::open(&self.root)?;
+        match root.lock() {
+            Ok(()) => Ok(Some(root)),
+            Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    #[cfg(not(unix))]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "matches the Unix signature; directories cannot be locked here"
+    )]
+    fn lock_project(&self) -> io::Result<Option<fs::File>> {
+        Ok(None)
+    }
 }
 
-/// A file's revision: modification time and length, which change whenever any
-/// writer replaces the file atomically.
+/// A file's revision: modification time, length and inode number. Every
+/// write replaces the file by renaming a new file over it, so the inode
+/// changes too; two writes compare equal only if one reuses the inode the
+/// other freed, with the same length, within one timestamp tick.
 fn revision(metadata: &fs::Metadata) -> io::Result<String> {
     let modified = metadata
         .modified()?
         .duration_since(UNIX_EPOCH)
         .map_err(io::Error::other)?
         .as_nanos();
-    Ok(format!("{modified:x}-{:x}", metadata.len()))
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(metadata);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Ok(format!("{modified:x}-{:x}-{inode:x}", metadata.len()))
 }
 
 /// Runs `work` on a helper thread so concurrent futures keep making progress.
@@ -122,7 +169,7 @@ fn send(agent: &ureq::Agent, request: &HttpRequest) -> Result<HttpResponse, Host
 /// Filesystem operations complete before their future is first polled.
 impl FsHost {
     fn read_file(&self, path: &str) -> Result<Option<Vec<u8>>, HostError> {
-        match fs::read(self.path(path)) {
+        match fs::read(self.path(path)?) {
             Ok(bytes) => Ok(Some(bytes)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(self.io_error(path, &error)),
@@ -130,7 +177,7 @@ impl FsHost {
     }
 
     fn file_revision(&self, path: &str) -> Result<Option<String>, HostError> {
-        match fs::metadata(self.path(path)).and_then(|metadata| revision(&metadata)) {
+        match fs::metadata(self.path(path)?).and_then(|metadata| revision(&metadata)) {
             Ok(revision) => Ok(Some(revision)),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(self.io_error(path, &error)),
@@ -138,20 +185,18 @@ impl FsHost {
     }
 
     fn write_file(&self, path: &str, bytes: &[u8], mode: WriteMode) -> Result<(), HostError> {
-        let target = self.path(path);
+        let target = self.path(path)?;
         let directory = target.parent().expect("project files have a parent");
-        let write = || -> io::Result<NamedTempFile> {
-            fs::create_dir_all(directory)?;
-            let mut file = NamedTempFile::new_in(directory)?;
-            file.write_all(bytes)?;
-            file.as_file_mut().sync_all()?;
-            Ok(file)
-        };
-        let file = write().map_err(|error| self.io_error(path, &error))?;
+        let file = fs::create_dir_all(directory)
+            .and_then(|()| files::stage(directory, bytes))
+            .map_err(|error| self.io_error(path, &error))?;
         let result = match mode {
             WriteMode::CreateNew => file.persist_noclobber(&target),
             WriteMode::Replace => file.persist(&target),
             WriteMode::ReplaceIfRevision(expected) => {
+                let _lock = self
+                    .lock_project()
+                    .map_err(|error| self.io_error("", &error))?;
                 if self.file_revision(path)?.as_deref() != Some(expected.as_str()) {
                     return Err(HostError::Conflict(self.locate(path)));
                 }
@@ -168,12 +213,13 @@ impl FsHost {
     }
 
     fn append_file(&self, path: &str, bytes: &[u8]) -> Result<(), HostError> {
+        let target = self.path(path)?;
         let _lock = self.append.lock().expect("append lock poisoned");
         let append = || -> io::Result<()> {
             let mut file = fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(self.path(path))?;
+                .open(&target)?;
             file.lock()?;
             file.write_all(bytes)
         };
@@ -181,7 +227,7 @@ impl FsHost {
     }
 
     fn remove_file(&self, path: &str) -> Result<(), HostError> {
-        match fs::remove_file(self.path(path)) {
+        match fs::remove_file(self.path(path)?) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => {
                 Err(self.io_error(path, &error))
             }
@@ -246,7 +292,7 @@ impl Host for FsHost {
         if path.is_empty() {
             self.root.display().to_string()
         } else {
-            self.path(path).display().to_string()
+            self.root.join(path).display().to_string()
         }
     }
 }
@@ -426,5 +472,24 @@ mod tests {
             transport_error(&ureq::Error::BadUri("x".into())),
             HostError::Io(_)
         ));
+    }
+
+    #[test]
+    fn project_paths_cannot_leave_the_project() {
+        let host = FsHost::new(Path::new("/project"), Console::new(true));
+        for path in ["00001.json", ".cache/translation/key.json"] {
+            assert!(host.path(path).is_ok(), "{path}");
+        }
+        for path in [
+            "",
+            "/etc/passwd",
+            "../other.json",
+            "a/../b",
+            "./a",
+            "a//b",
+            "a/",
+        ] {
+            assert!(host.path(path).is_err(), "{path}");
+        }
     }
 }

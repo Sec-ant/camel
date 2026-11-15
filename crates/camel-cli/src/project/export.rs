@@ -16,7 +16,10 @@ use serde_json::Value;
 use tempfile::NamedTempFile;
 
 use super::{ProjectSource, load_font, read, run};
-use crate::host::{Console, ExportView, FsHost, host_error};
+use crate::{
+    files,
+    host::{Console, ExportView, FsHost, host_error},
+};
 
 fn is_cbz(path: &Path) -> bool {
     path.extension()
@@ -37,7 +40,7 @@ impl Staged {
             .context("archive output has no parent")?;
         fs::create_dir_all(parent)?;
         Ok(Self {
-            temporary: NamedTempFile::new_in(parent)?,
+            temporary: files::temporary(parent)?,
             destination,
         })
     }
@@ -130,11 +133,7 @@ impl<'a> Publisher<'a> {
                 (ExportFileKind::Mask, Kind::Erase { masks: Some(masks) }) => *masks,
                 _ => self.output,
             };
-            let mut staged = NamedTempFile::new_in(directory)?;
-            staged.write_all(&file.bytes)?;
-            if file.kind == ExportFileKind::Metadata {
-                staged.as_file().sync_all()?;
-            }
+            let staged = files::stage(directory, &file.bytes)?;
             artifacts.push((directory.join(&file.name), staged));
         }
         if let Kind::Render { .. } = self.kind {
@@ -183,11 +182,11 @@ impl<'a> Publisher<'a> {
             );
         }
         if let (Some(path), Some(report)) = (&self.report, report) {
-            let mut temp =
-                NamedTempFile::new_in(path.parent().context("report output has no parent")?)?;
-            temp.write_all(&report)?;
-            sync_export_file(temp.as_file())?;
-            publish_matching(path, temp)?;
+            let staged = files::stage(
+                path.parent().context("report output has no parent")?,
+                &report,
+            )?;
+            publish_matching(path, staged)?;
         }
         for (path, temp) in std::mem::take(&mut self.pending) {
             publish_matching(&path, temp)?;
@@ -197,6 +196,7 @@ impl<'a> Publisher<'a> {
             temporary,
         }) = self.archive.take()
         {
+            files::sync(temporary.as_file())?;
             publish_matching(&destination, temporary)?;
         }
         Ok(())
@@ -270,24 +270,6 @@ pub fn erase(project: &Path, output: &Path, mask_output: Option<&Path>, quiet: b
         format(output),
         mask_output.is_some(),
     ))
-}
-
-fn sync_export_file(file: &File) -> std::io::Result<()> {
-    match file.sync_all() {
-        #[cfg(target_vendor = "apple")]
-        Err(error)
-            if error.kind() == std::io::ErrorKind::Unsupported
-                || error.raw_os_error() == Some(45) =>
-        {
-            loop {
-                match rustix::fs::fsync(file) {
-                    Err(rustix::io::Errno::INTR) => {}
-                    result => return result.map_err(std::io::Error::from),
-                }
-            }
-        }
-        result => result,
-    }
 }
 
 fn publish_matching(path: &Path, staged: NamedTempFile) -> Result<()> {

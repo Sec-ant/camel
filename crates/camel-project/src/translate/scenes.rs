@@ -3,12 +3,12 @@
 use futures::StreamExt as _;
 
 use super::{
-    BTreeMap, Cell, Context, Error, Event, Host, PageSource, Record, Run, SceneSync, WriteMode,
-    chain, fail, isolated_context, read_json, save, translate_range,
+    BTreeMap, Cell, Context, Error, Event, Host, PageSource, Record, Run, SceneSync, chain, fail,
+    isolated_context, read_json, translate_range, update_record,
 };
 use crate::prepare::{load_plan, prepare};
 
-const CONFLICT: &str = "translation terminology conflict: ";
+use crate::{Issue, TermVariants};
 type SceneResult = Option<Result<(Context, usize, usize), Error>>;
 
 pub(super) async fn parallel<H: Host, S: PageSource>(
@@ -126,26 +126,28 @@ pub(super) async fn parallel<H: Host, S: PageSource>(
                 let key = source.trim().to_ascii_lowercase();
                 if let Some(old) = known.get(&key) {
                     if old != &target {
-                        conflicts.push(format!("{source}: {old} / {target}"));
+                        conflicts.push(TermVariants {
+                            source,
+                            first: old.clone(),
+                            second: target,
+                        });
                     }
                 } else {
                     known.insert(key, target);
                 }
             }
         }
-        let name = &scene.pages[0];
-        let mut record: Record = read_json(host, name).await?;
-        let old = record.issues.clone();
-        record.issues.retain(|issue| !issue.starts_with(CONFLICT));
-        if !conflicts.is_empty() {
+        update_record(host, &scene.pages[0], |record| {
+            let old = record.issues.clone();
             record
                 .issues
-                .push(format!("{CONFLICT}{}", conflicts.join("; ")));
-        }
-        if old != record.issues {
-            save(host, name, &record, WriteMode::Replace).await?;
-            host.report(Event::PageSaved { page: name.clone() });
-        }
+                .retain(|issue| !matches!(issue, Issue::SceneTermConflicts { .. }));
+            if !conflicts.is_empty() {
+                record.issues.push(Issue::SceneTermConflicts { conflicts });
+            }
+            old != record.issues
+        })
+        .await?;
     }
     if filtered_pages > 0 {
         errors.push(format!("{filtered_pages} pages remain untranslated after content_filter; independent scenes continued; {failed_pages} other pages remain unresolved"));

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use camel_project::{Record, edit};
 
-use super::{plan::save_edited, read};
+use super::{plan::save_edited, read, write_atomic};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Review {
@@ -146,17 +146,11 @@ pub fn export_review(project: &Path, output: &Path) -> Result<()> {
                 .collect(),
         });
     }
-    let path = std::path::absolute(output)?;
-    let mut file = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
-    serde_json::to_writer_pretty(
-        file.as_file_mut(),
-        &Review {
-            schema_version: 1,
-            pages,
-        },
-    )?;
-    file.as_file_mut().sync_all()?;
-    file.persist_noclobber(path)?;
+    let bytes = serde_json::to_vec_pretty(&Review {
+        schema_version: 1,
+        pages,
+    })?;
+    write_atomic(&std::path::absolute(output)?, &bytes, false)?;
     Ok(())
 }
 

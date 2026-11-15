@@ -68,10 +68,10 @@ fn project() -> TempDir {
         let record = json!({
             "source":source_path,
             "page":{"width":200,"height":120,"regions":[{"block":block,"bubble":{"bounds":bounds,"interior":interior,"erase":[[20,20,30]],"background":[255,255,255]},"translation":target}]},
-            "context":{"glossary":{"Mark":"马克"},"recent":[{"source":"Hello, Mark!","target":"你好，马克！"},{"source":source,"target":target}]},
+            "context":{"glossary":{"Mark":"马克"}},
             "service":{"base_url":"http://127.0.0.1:1/v1","model":"review-test","language":"zh-CN","visual":false},
             "translated_source":[[id,source]],
-            "issues":["fixture diagnostic"],
+            "issues":[{"kind": "note", "text": "fixture diagnostic"}],
             "analysis":{"schema_version":1,"coordinate_system":"image_pixels_top_left","panels":[{"id":0,"bounds":bounds,"contour":[[10,10],[190,10],[190,110],[10,110],[10,10]]}],"initial_ocr":[block],"regions":[{"region_id":id,"panel_id":0,"speaker_id":"mark","contours":[[[10,10],[190,10],[190,110],[10,110],[10,10]]]}],"scene_summary":"A short conversation."}
         });
         write(&dir.path().join(format!("{number:05}.json")), &record);
@@ -113,19 +113,20 @@ fn review_edits_do_not_remove_content_filter_status() {
     let dir = project();
     let record_path = dir.path().join("00001.json");
     let mut record = read(&record_path);
-    record["issues"] = json!(["translation unresolved: content_filter: service declined"]);
+    record["issues"] = json!([{"kind": "content_filter", "error": "service declined"}]);
     write(&record_path, &record);
     let (path, mut review) = export(dir.path());
     review["pages"][0]["regions"][0]["translation"] = json!("你好！");
     success(apply(dir.path(), &path, &review));
     let updated = read(&record_path);
     assert_eq!(updated["page"]["regions"][0]["translation"], "你好！");
-    assert!(updated["issues"].as_array().unwrap().iter().any(|issue| {
-        issue
-            .as_str()
+    assert!(
+        updated["issues"]
+            .as_array()
             .unwrap()
-            .starts_with("translation unresolved: content_filter")
-    }));
+            .iter()
+            .any(|issue| { issue["kind"] == "content_filter" })
+    );
 }
 
 #[test]
@@ -153,11 +154,6 @@ fn review_roundtrip_updates_dialogue_and_context_preserving_all_other_data() {
     review["pages"][0]["regions"][0]["translation"] = json!("嗨，马克。");
     success(apply(dir.path(), &review_path, &review));
     expected["page"]["regions"][0]["translation"] = json!("嗨，马克。");
-    for exchange in expected["context"]["recent"].as_array_mut().unwrap() {
-        if exchange["source"] == "Hello, Mark!" {
-            exchange["target"] = json!("嗨，马克。");
-        }
-    }
     assert_eq!(read(&record_path), expected);
     assert_eq!(
         fs::read(dir.path().join("sources/00001.png")).unwrap(),
@@ -461,9 +457,6 @@ fn reviewing_visual_dialogue_updates_corrected_context_and_keeps_semantics() {
     expected["analysis"]["regions"][0]["semantic_source"] = json!("model");
     expected["analysis"]["scene_summary_source"] = json!("model");
     expected["context"]["scene_summary"] = json!("A short conversation.");
-    expected["context"]["recent"] = json!([{
-        "source":"Hello, Mark.","target":"你好，马克！","speaker":"young man in yellow"
-    }]);
     write(&record_path, &expected);
     let (review_path, mut review) = export(dir.path());
     review["pages"].as_array_mut().unwrap().truncate(1);
@@ -471,48 +464,7 @@ fn reviewing_visual_dialogue_updates_corrected_context_and_keeps_semantics() {
     review["pages"][0]["regions"][0]["translation"] = json!("嗨，马克！");
     success(apply(dir.path(), &review_path, &review));
     expected["page"]["regions"][0]["translation"] = json!("嗨，马克！");
-    expected["context"]["recent"][0]["target"] = json!("嗨，马克！");
     assert_eq!(read(&record_path), expected);
-}
-
-#[test]
-fn resumed_context_uses_reviewed_dialogue_despite_later_stale_checkpoint() {
-    let dir = project();
-    let (review_path, mut review) = export(dir.path());
-    review["pages"].as_array_mut().unwrap().truncate(1);
-    review["pages"][0]["regions"][0]["translation"] = json!("嗨，马克！");
-    success(apply(dir.path(), &review_path, &review));
-    // An empty following page records continuation context without an API call.
-    write(
-        &dir.path().join("00003.json"),
-        &json!({"source":"sources/00002.png","page":{"width":200,"height":120,"regions":[]}}),
-    );
-    write(
-        &dir.path().join("index.json"),
-        &json!(["00001.json", "00002.json", "00003.json"]),
-    );
-    success(
-        cli()
-            .arg("translate")
-            .arg("--text-only")
-            .arg(dir.path())
-            .args([
-                "--base-url",
-                "http://127.0.0.1:1/v1",
-                "--model",
-                "review-test",
-                "--api-key-file",
-            ])
-            .arg(dir.path().join("missing-key"))
-            .output()
-            .unwrap(),
-    );
-    let context = read(&dir.path().join("00003.json"))["context"].clone();
-    assert_eq!(
-        context["recent"],
-        json!([{"source":"Hello, Mark!","target":"嗨，马克！"},{"source":"Where are you?","target":"你在哪儿？"}])
-    );
-    assert_eq!(context["glossary"]["Mark"], "马克");
 }
 
 #[test]

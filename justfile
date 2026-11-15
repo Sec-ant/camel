@@ -3,8 +3,11 @@ set default-list
 fmt:
     cargo fmt --all -- --check
 
+# The browser glue in camel-web compiles only for wasm32, so it is linted and
+# documented for that target as well.
 clippy:
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy -p camel-web --target wasm32-unknown-unknown --locked -- -D warnings
 
 test:
     cargo test --workspace --locked
@@ -12,6 +15,7 @@ test:
 [env("RUSTDOCFLAGS", "-D warnings")]
 doc:
     cargo doc --workspace --no-deps --locked
+    cargo doc -p camel-web --target wasm32-unknown-unknown --no-deps --locked
 
 # Build the WebAssembly core and its JS bindings into web/src/wasm.
 # SIMD comes from .cargo/config.toml; text recognition needs it.
