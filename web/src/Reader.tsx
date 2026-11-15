@@ -1,3 +1,5 @@
+import { t } from "./i18n.ts";
+import { LanguageSelect } from "./LanguageSelect.tsx";
 import { useEffect, useState } from "preact/hooks";
 import { call } from "./engine.ts";
 import { JobView } from "./JobView.tsx";
@@ -63,7 +65,7 @@ export function ReaderScreen() {
       const store = new DirectoryStore(directory);
       const finished = await runAnalysis({ store, comic, comicId: current.id, comicPages: current.pages, models, workers: defaultWorkers() });
       if (finished.status !== "done") {
-        setError(finished.error ?? "Analysis did not complete. You can try again.");
+        setError(finished.error ?? t("Analysis did not complete. You can try again."));
         return;
       }
       const session = await Session.open({ files: new ProjectFiles(store), comic: { id: current.id, files: comic, pages: current.pages }, font, onProgress: () => undefined });
@@ -75,31 +77,32 @@ export function ReaderScreen() {
   };
   return <div class="reader-screen">
     <header class="titlebar"><h1 class="mono">Camel workbench <span class="title-project">{current.name}</span></h1>
-      <button class="title-link" type="button" onClick={() => { if (saving && !confirm("The comic is still being saved. Leave?")) return; if (!jobRunning() || confirm("An analysis is running. Leave?")) location.href = location.pathname; }}>Open another project</button>
+      <LanguageSelect />
+      <button class="title-link" type="button" onClick={() => { if (saving && !confirm(t("The comic is still being saved. Leave?"))) return; if (!jobRunning() || confirm(t("An analysis is running. Leave?"))) location.href = location.pathname; }}>{t("Open another project")}</button>
     </header>
     <div class="reader-toolbar">
-      <span class="mono">PAGE {page + 1} / {current.pages.length}</span>
-      <span class="dim">{current.pages[page]}{saving ? " · Saving…" : ""}</span>
-      <div class="buttons"><button class="button" disabled={page === 0} onClick={() => setPage(page - 1)}>Prev</button>
-        <button class="button" disabled={page + 1 === current.pages.length} onClick={() => setPage(page + 1)}>Next</button>
-        <button class="button inverse" disabled={busy} onClick={() => void analyze()}>{busy ? "Preparing…" : "Analyze and edit"}</button></div>
+      <span class="mono">{t("PAGE")}{" "}{page + 1} / {current.pages.length}</span>
+      <span class="dim">{current.pages[page]}{saving ? ` · ${t("SAVING…")}` : ""}</span>
+      <div class="buttons"><button class="button" disabled={page === 0} onClick={() => setPage(page - 1)}>{t("Prev")}</button>
+        <button class="button" disabled={page + 1 === current.pages.length} onClick={() => setPage(page + 1)}>{t("Next")}</button>
+        <button class="button inverse" disabled={busy} onClick={() => void analyze()}>{busy ? t("Preparing…") : t("Analyze and edit")}</button></div>
     </div>
     <details class="reader-options">
-      <summary>Analysis options</summary>
+      <summary>{t("Analysis options")}</summary>
       <div class="buttons">
         <button class="button" type="button" disabled={busy} onClick={() => void chooseModels().then((models) => {
-          if (models) setOptions("Custom models selected");
-        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>Choose models…</button>
+          if (models) setOptions(t("Custom models selected"));
+        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>{t("Choose models…")}</button>
         <button class="button" type="button" disabled={busy} onClick={() => void chooseFont().then((font) => {
           if (font) setOptions(`Font: ${font.name}`);
-        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>Choose font…</button>
-        <span class="helper">{options ?? "Defaults are used unless you choose your own."}</span>
+        }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))}>{t("Choose font…")}</button>
+        <span class="helper">{options ?? t("Defaults are used unless you choose your own.")}</span>
       </div>
     </details>
     {error && <p class="alert reader-error">{error}</p>}
     <div class="reader-content">
-      <main class="reader-page">{image ? <img src={image} alt={`Page ${page + 1}`} /> : <p>Loading page…</p>}</main>
-      {busy && <aside class="reader-job" aria-label="Analysis progress"><JobView /></aside>}
+      <main class="reader-page">{image ? <img src={image} alt={`${t("Page")} ${page + 1}`} /> : <p>{t("Loading page…")}</p>}</main>
+      {busy && <aside class="reader-job" aria-label={t("Analysis progress")}><JobView /></aside>}
     </div>
   </div>;
 }

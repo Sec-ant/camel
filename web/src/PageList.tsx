@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Left rail: filters and a virtualized list of every page in the volume.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
@@ -57,12 +58,12 @@ export function PageList() {
   }
 
   return (
-    <nav class="rail" aria-label="Pages">
+    <nav class="rail" aria-label={t("Pages")}>
       <div class="section-head">
-        <h2>Pages</h2>
+        <h2>{t("Pages")}</h2>
         <span class="mono dim">{pages.length}</span>
       </div>
-      <div class="rows filters" role="radiogroup" aria-label="Filter pages" onKeyDown={onRadioGroupKey}>
+      <div class="rows filters" role="radiogroup" aria-label={t("Filter pages")} onKeyDown={onRadioGroupKey}>
         {PAGE_FILTERS.map((item) => (
           <button
             key={item.id}
@@ -73,13 +74,13 @@ export function PageList() {
             tabIndex={filter === item.id ? 0 : -1}
             onClick={() => (pageFilter.value = item.id)}
           >
-            <span>{item.label}</span>
+            <span>{t(item.label)}</span>
             <span class="mono">{counts[item.id]}</span>
           </button>
         ))}
       </div>
       <p class="legend mono">
-        <span>M missing</span> · <span>U unresolved</span> · <span>I issues</span>
+        <span>{t("M missing")}</span> · <span>{t("U unresolved")}</span> · <span>{t("I issues")}</span>
       </p>
       <div
         ref={scroller}
@@ -88,10 +89,9 @@ export function PageList() {
       >
         {indices.length === 0 ? (
           <p class="helper pad">
-            {filter === "todo" ? "Every page is done." : "No page matches this filter."}{" "}
+            {filter === "todo" ? t("Every page is done.") : t("No page matches this filter.")}{" "}
             <button type="button" class="link" onClick={() => (pageFilter.value = "all")}>
-              Show all pages
-            </button>
+              {t("Show all pages")}</button>
           </p>
         ) : (
           <ol class="page-rows" style={`height:${indices.length * ROW_HEIGHT}px`}>
@@ -143,7 +143,7 @@ function PageRow({
         title={page.source_name}
         aria-label={`Page ${page.index + 1}${description ? `, ${description}` : ""}`}
       >
-        <span>Page {page.index + 1}</span>
+        <span>{t("Page")}{" "}{page.index + 1}</span>
         <span class="mono">{codes}</span>
       </a>
     </li>

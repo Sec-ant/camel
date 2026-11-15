@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Page canvas: header with view controls, tool strip, the page image + preview patches in a
 // transformed stage, overlays on a screen-space canvas, and a status bar.
 
@@ -423,7 +424,7 @@ export function Canvas() {
   const imageState = imageLoaded.value === index ? "ready" : image?.error ? "error" : "loading";
 
   return (
-    <section class="canvas" aria-label="Page canvas">
+    <section class="canvas" aria-label={t("Page canvas")}>
       <CanvasHead />
       <div class="canvas-body">
         <ToolStrip />
@@ -459,16 +460,19 @@ export function Canvas() {
                 <div class="page-image" data-state={image ? "missing" : "loading"} />
               )}
               {showPatches &&
-                result?.erase.map((patch) => <Patch key={`e${patch.region}`} {...patch} />)}
+                (viewMode.value === "erased" ? result?.clean : result?.erase)?.map((patch) => <Patch key={`e${patch.region}`} {...patch} />)}
               {showPatches &&
                 viewMode.value === "final" &&
                 result?.text.map((patch) => <Patch key={`t${patch.region}`} {...patch} />)}
             </div>
           )}
           <canvas ref={canvasRef} class="overlay" aria-hidden="true" />
+          {viewMode.value === "erased" && result?.clean_error && (
+            <p class="canvas-message" role="alert">{result.clean_error}</p>
+          )}
           {!page && (
             <p class="canvas-message" role={loadError.value ? "alert" : undefined}>
-              {loadError.value ?? "Loading page…"}
+              {loadError.value ?? t("Loading page…")}
             </p>
           )}
           {page && imageState === "error" && (
@@ -477,7 +481,7 @@ export function Canvas() {
             </p>
           )}
           {page && image && !image.url && !image.error && (
-            <p class="canvas-message">No comic chosen: page images and previews are unavailable.</p>
+            <p class="canvas-message">{t("No comic chosen: page images and previews are unavailable.")}</p>
           )}
         </div>
       </div>
@@ -543,14 +547,14 @@ function CanvasHead() {
     <header class="canvas-head">
       <div class="head-row">
         <p class="mono head-title">
-          VIEW / {comparing.value ? "ORIGINAL" : mode.label.toUpperCase()}
+          {t("VIEW /")}{" "}{comparing.value ? t("Original") : t(mode.label)}
           <span class="annotation">
             {page ? `${page.width} × ${page.height} px` : ""}
             {"  "}
             {Math.round(scale * 100)}%
           </span>
         </p>
-        <div class="buttons joined" role="radiogroup" aria-label="Display" onKeyDown={onRadioGroupKey}>
+        <div class="buttons joined" role="radiogroup" aria-label={t("Display")} onKeyDown={onRadioGroupKey}>
           {MODES.map((item) => (
             <button
               key={item.id}
@@ -559,58 +563,55 @@ function CanvasHead() {
               class="button"
               aria-checked={viewMode.value === item.id}
               tabIndex={viewMode.value === item.id ? 0 : -1}
-              title={`${item.label} (${item.key})`}
+              title={`${t(item.label)} (${item.key})`}
               onClick={() => {
                 viewMode.value = item.id;
                 savePreferences();
               }}
             >
-              {item.label}
+              {t(item.label)}
             </button>
           ))}
         </div>
-        <div class="buttons" role="group" aria-label="Zoom">
-          <button type="button" class="button square" aria-label="Zoom out (−)" title="Zoom out (−)" onClick={() => zoomTo(scale / 1.25)}>
+        <div class="buttons" role="group" aria-label={t("Zoom")}>
+          <button type="button" class="button square" aria-label={t("Zoom out (−)")} title={t("Zoom out (−)")} onClick={() => zoomTo(scale / 1.25)}>
             −
           </button>
-          <button type="button" class="button square" aria-label="Zoom in (+)" title="Zoom in (+)" onClick={() => zoomTo(scale * 1.25)}>
+          <button type="button" class="button square" aria-label={t("Zoom in (+)")} title={t("Zoom in (+)")} onClick={() => zoomTo(scale * 1.25)}>
             +
           </button>
-          <button type="button" class="button" title="Actual pixels (⇧1)" onClick={() => zoomTo(1)}>
+          <button type="button" class="button" title={t("Actual pixels (⇧1)")} onClick={() => zoomTo(1)}>
             1:1
           </button>
           <button
             type="button"
             class="button"
             aria-pressed={zoomMode.value === "page"}
-            title="Fit page (0)"
+            title={t("Fit page (0)")}
             onClick={() => fitView("page")}
           >
-            Fit
-          </button>
+            {t("Fit")}</button>
           <button
             type="button"
             class="button"
             aria-pressed={zoomMode.value === "width"}
-            title="Fit width (W)"
+            title={t("Fit width (W)")}
             onClick={() => fitView("width")}
           >
-            Width
-          </button>
+            {t("Width")}</button>
           <button
             type="button"
             class="button"
-            title="Zoom to selected region (F)"
+            title={t("Zoom to selected region (F)")}
             disabled={!selectedRegion.value}
             onClick={fitSelection}
           >
-            Region
-          </button>
+            {t("Region")}</button>
         </div>
       </div>
       <div class="head-row">
-        <p class="mono head-label">LAYERS</p>
-        <div class="checks" role="group" aria-label="Overlays">
+        <p class="mono head-label">{t("LAYERS")}</p>
+        <div class="checks" role="group" aria-label={t("Overlays")}>
           {OVERLAY_TOGGLES.map((item) => (
             <label key={item.id} class="check" title={item.key ? `Toggle with ${item.key}` : undefined}>
               <input
@@ -618,13 +619,13 @@ function CanvasHead() {
                 checked={overlays.value[item.id]}
                 onChange={(event) => setOverlay(item.id, (event.currentTarget as HTMLInputElement).checked)}
               />
-              {item.label}
+              {t(item.label)}
               {item.id === "erase" && <span class="ink ink-erase" aria-hidden="true" />}
               {item.id === "interior" && <span class="ink ink-interior" aria-hidden="true" />}
             </label>
           ))}
         </div>
-        <p class="annotation head-hint">Hold ` to compare with the original</p>
+        <p class="annotation head-hint">{t("Hold ` to compare with the original")}</p>
       </div>
     </header>
   );
@@ -633,15 +634,15 @@ function CanvasHead() {
 function ToolStrip() {
   const active = tool.value;
   return (
-    <div class="toolstrip" role="toolbar" aria-label="Tools" aria-orientation="vertical">
+    <div class="toolstrip" role="toolbar" aria-label={t("Tools")} aria-orientation="vertical">
       {TOOLS.map((item) => (
         <button
           key={item.id}
           type="button"
           class="tool"
           aria-pressed={active === item.id}
-          aria-label={`${item.label} (${item.key})`}
-          title={`${item.label} (${item.key})`}
+          aria-label={`${t(item.label)} (${item.key})`}
+          title={`${t(item.label)} (${item.key})`}
           onClick={() => (tool.value = item.id)}
         >
           <Icon name={item.icon} />
@@ -660,10 +661,10 @@ function StatusBar() {
   const brush = active === "erase" || active === "interior";
   return (
     <footer class="statusbar">
-      <p class="interactions">{INTERACTIONS[active]}</p>
+      <p class="interactions">{t(INTERACTIONS[active])}</p>
       <p class="mono status-readouts" aria-live="polite">
-        {previewBusy.value && <span class="tag-inverse">RENDERING</span>}
-        {brush && <span>BRUSH {brushSize.value} px</span>}
+        {previewBusy.value && <span class="tag-inverse">{t("RENDERING")}</span>}
+        {brush && <span>{t("BRUSH")}{" "}{brushSize.value} px</span>}
         {inside && (
           <span>
             X {Math.floor(px)} Y {Math.floor(py)}

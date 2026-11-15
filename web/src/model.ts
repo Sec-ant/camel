@@ -101,6 +101,8 @@ export interface Retained {
 export interface Preview {
   readonly revision: string;
   readonly erase: readonly Patch[];
+  readonly clean: readonly Patch[];
+  readonly clean_error: string | null;
   readonly text: readonly Patch[];
   readonly layouts: readonly Layout[];
   readonly retained: readonly Retained[];

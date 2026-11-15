@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // First-run screen: open an existing project (folder, comic, font, recent projects) or create
 // a new one (see NewProject.tsx).
 
@@ -82,27 +83,25 @@ export function OpenScreen() {
   };
   return (
     <main class="open-screen">
-      <div class="buttons joined mode-switch" role="group" aria-label="Project">
+      <div class="buttons joined mode-switch" role="group" aria-label={t("Project")}>
         <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => { interacted.current = true; openMode.value = "open"; }}>
-          Open project
-        </button>
+          {t("Open project")}</button>
         <button type="button" class="button" aria-pressed={mode === "new"} onClick={() => { interacted.current = true; openMode.value = "new"; }}>
-          New project
-        </button>
+          {t("New project")}</button>
       </div>
       {/* Both stay mounted so choices (and a running analysis view) survive switching. */}
       <div class="open-mode" hidden={mode !== "open"}>
         <OpenProject mayOpenStarter={() => !interacted.current} />
       </div>
       <div class="open-mode" hidden={mode !== "new"}>
-        {advanced ? <><button class="link" type="button" onClick={() => setAdvanced(false)}>Back to open comic</button><NewProject /></> : (
+        {advanced ? <><button class="link" type="button" onClick={() => setAdvanced(false)}>{t("Back to open comic")}</button><NewProject /></> : (
           <section class="open-panel" aria-labelledby="comic-title">
-            <div class="section-head"><h2 id="comic-title">Open a comic</h2></div>
-            <p class="helper pad">Choose a CBZ/ZIP, CBR/RAR, PNG, JPEG, or image folder. Read it now and analyze it when you are ready to edit.</p>
+            <div class="section-head"><h2 id="comic-title">{t("Open a comic")}</h2></div>
+            <p class="helper pad">{t("Choose a CBZ/ZIP, CBR/RAR, PNG, JPEG, or image folder. Read it now and analyze it when you are ready to edit.")}</p>
             <div class="open-actions"><div class="buttons">
-              <button class="button inverse" type="button" onClick={() => void chooseComic(false)}>Choose file…</button>
-              <button class="button" type="button" onClick={() => void chooseComic(true)}>Image folder…</button>
-            </div><button class="link" type="button" onClick={() => { interacted.current = true; setAdvanced(true); }}>Advanced…</button></div>
+              <button class="button inverse" type="button" onClick={() => void chooseComic(false)}>{t("Choose file…")}</button>
+              <button class="button" type="button" onClick={() => void chooseComic(true)}>{t("Image folder…")}</button>
+            </div><button class="link" type="button" onClick={() => { interacted.current = true; setAdvanced(true); }}>{t("Advanced…")}</button></div>
             {quickError && <p class="alert pad">{quickError}</p>}
           </section>
         )}
@@ -280,13 +279,13 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
     <>
       <section class="open-panel" aria-labelledby="open-title">
         <div class="section-head">
-          <h2 id="open-title">Open project</h2>
-          <span class="mono dim">{tier === "direct" ? "DIRECT" : "SNAPSHOT"}</span>
+          <h2 id="open-title">{t("Open project")}</h2>
+          <span class="mono dim">{tier === "direct" ? t("DIRECT") : t("SNAPSHOT")}</span>
         </div>
-        <p class="helper pad tier-line">{TIER_LINE}</p>
+        <p class="helper pad tier-line">{t(TIER_LINE)}</p>
         <Slot
           number={1}
-          title="Project folder"
+          title={t("Project folder")}
           note="The folder created by camel analyze (index.json and one record per page)."
           check={projectCheck}
           status={projectState && `${projectState.choice.files.name} · ${projectState.pages} pages`}
@@ -295,12 +294,11 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
             const choice = await chooseProject();
             if (choice) await loadProject(choice);
           })}>
-            Choose folder…
-          </button>
+            {t("Choose folder…")}</button>
         </Slot>
         <Slot
           number={2}
-          title="Comic"
+          title={t("Comic")}
           note="The original CBZ/CBR file, or the image folder. Needed for page images, previews and edits."
           check={comicCheck}
           status={
@@ -313,18 +311,16 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
             const choice = await chooseComicArchive();
             if (choice) await loadComic(choice);
           })}>
-            Choose file…
-          </button>
+            {t("Choose file…")}</button>
           <button type="button" class="button" onClick={pick(async () => {
             const choice = await chooseComicFolder();
             if (choice) await loadComic(choice);
           })}>
-            Image folder…
-          </button>
+            {t("Image folder…")}</button>
         </Slot>
         <Slot
           number={3}
-          title="Font"
+          title={t("Font")}
           note="Chinese font used to typeset previews; remembered in this browser."
           check={{ state: font ? "ok" : "idle" }}
           status={font && `${font.name} · ${(font.bytes.byteLength / 1048576).toFixed(1)} MB`}
@@ -333,32 +329,30 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
             const chosen = await chooseFont();
             if (chosen) setFont(chosen);
           })}>
-            Choose font…
-          </button>
+            {t("Choose font…")}</button>
         </Slot>
         <div class="open-actions">
           {progress ? (
             <div class="progress" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.done}>
               <span class="mono">
-                Reading pages {progress.done} / {progress.total}
+                {t("Reading pages")}{" "}{progress.done} / {progress.total}
               </span>
               <span class="progress-track">
                 <span class="progress-fill" style={`width:${(progress.done / Math.max(progress.total, 1)) * 100}%`} />
               </span>
             </div>
           ) : (
-            <p class="helper">{openError ?? (font ? "" : "Choose a font to continue.")}</p>
+            <p class="helper">{openError ?? (font ? "" : t("Choose a font to continue."))}</p>
           )}
           <button type="button" class="button inverse" disabled={!ready || progress !== null} onClick={() => void open()}>
-            Open workbench
-          </button>
+            {t("Open workbench")}</button>
         </div>
       </section>
 
       {recent.length > 0 && (
         <section class="open-panel" aria-labelledby="recent-title">
           <div class="section-head">
-            <h2 id="recent-title">Recent projects</h2>
+            <h2 id="recent-title">{t("Recent projects")}</h2>
           </div>
           <ol class="rows">
             {recent.map((entry) => (
@@ -366,15 +360,13 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
                 <span>{entry.name}</span>
                 <span class="mono dim">{new Date(entry.opened).toLocaleDateString("en-CA")}</span>
                 <button type="button" class="button small" onClick={pick(() => reopenRecent(entry))}>
-                  Reopen
-                </button>
+                  {t("Reopen")}</button>
                 <button
                   type="button"
                   class="link"
                   onClick={() => void forgetProject(entry.name).then(() => recentProjects().then(setRecent))}
                 >
-                  Forget
-                </button>
+                  {t("Forget")}</button>
               </li>
             ))}
           </ol>
@@ -384,25 +376,23 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
       {stored.length > 0 && (
         <section class="open-panel" aria-labelledby="stored-title">
           <div class="section-head">
-            <h2 id="stored-title">Projects in this browser</h2>
+            <h2 id="stored-title">{t("Projects in this browser")}</h2>
           </div>
           <ol class="rows">
             {stored.map((entry) => (
               <li key={entry.name} class="recent">
                 <span>{entry.name}</span>
-                <span class="mono dim">{entry.state === "project" ? "READY" : entry.reader ? "COMIC" : "ANALYSIS UNFINISHED"}</span>
+                <span class="mono dim">{entry.state === "project" ? t("READY") : entry.reader ? t("COMIC") : t("ANALYSIS UNFINISHED")}</span>
                 {entry.state === "project" || entry.reader ? (
                   <button
                     type="button"
                     class="button small"
                     onClick={pick(() => openStored(entry.handle))}
                   >
-                    Choose
-                  </button>
+                    {t("Choose")}</button>
                 ) : (
                   <button type="button" class="button small" onClick={() => (openMode.value = "new")}>
-                    Continue…
-                  </button>
+                    {t("Continue…")}</button>
                 )}
                 <button
                   type="button"
@@ -412,8 +402,7 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
                     void deleteBrowserProject(entry.name).then(() => browserProjects().then(setStored));
                   }}
                 >
-                  Delete
-                </button>
+                  {t("Delete")}</button>
               </li>
             ))}
           </ol>
@@ -438,11 +427,11 @@ export function Slot(props: {
       <span class="mono slot-number">{props.number}</span>
       <div class="slot-body">
         <h3>{props.title}</h3>
-        <p class="helper">{props.note}</p>
-        {check.state === "checking" && <p class="mono">Checking…</p>}
-        {check.state === "error" && <p class="alert slot-alert">{check.message}</p>}
+        <p class="helper">{t(props.note)}</p>
+        {check.state === "checking" && <p class="mono">{t("Checking…")}</p>}
+        {check.state === "error" && <p class="alert slot-alert">{t(check.message)}</p>}
         {check.state === "ok" && props.status && <p class="mono">{props.status}</p>}
-        {check.state !== "error" && props.warning && <p class="helper">{props.warning}</p>}
+        {check.state !== "error" && props.warning && <p class="helper">{t(props.warning)}</p>}
       </div>
       <div class="buttons">{props.children}</div>
     </div>

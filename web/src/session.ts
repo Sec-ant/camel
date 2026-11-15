@@ -314,14 +314,17 @@ export class Session {
     this.#previewUrls = urls;
     // Old patches stay on screen until the new ones have loaded.
     setTimeout(() => stale.forEach((url) => URL.revokeObjectURL(url)), 5000);
-    const raw = JSON.parse(rendered.json) as Omit<Preview, "revision" | "erase" | "text"> & {
+    const raw = JSON.parse(rendered.json) as Omit<Preview, "revision" | "erase" | "clean" | "text"> & {
       erase: (Omit<Patch, "image"> & { image: number })[];
+      clean: (Omit<Patch, "image"> & { image: number })[];
       text: (Omit<Patch, "image"> & { image: number })[];
     };
     const patch = (item: Omit<Patch, "image"> & { image: number }): Patch => ({ ...item, image: urls[item.image]! });
     return {
       revision: record.revision,
       erase: raw.erase.map(patch),
+      clean: raw.clean.map(patch),
+      clean_error: raw.clean_error,
       text: raw.text.map(patch),
       layouts: raw.layouts,
       retained: raw.retained,

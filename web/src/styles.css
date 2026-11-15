@@ -1736,3 +1736,17 @@ textarea.prompt {
   .reader-job { width: 400px; max-height: none; flex: none; border-top: 0; border-left: 1px solid var(--ink); }
 }
 @media (max-width: 700px) { .reader-toolbar { flex-wrap: wrap; } .reader-toolbar .buttons { margin-left: 0; } }
+
+.language-select {
+  max-width: 10rem;
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+}
+
+@media (max-width: 1279px) {
+  .toolbar > .buttons { min-width: 0; max-width: 100%; flex: 0 1 auto; }
+  .title-links { min-width: 0; overflow-x: auto; }
+}

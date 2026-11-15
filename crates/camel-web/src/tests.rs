@@ -95,6 +95,42 @@ fn edits_return_the_record_file_the_cli_writes() {
 }
 
 #[test]
+fn erased_preview_does_not_require_a_translation() {
+    let Some(font) = font() else {
+        eprintln!("skipped: set CAMEL_TEST_FONT to a CJK font");
+        return;
+    };
+    let page = page_png();
+    let record = record_json(&page);
+    let result = edit(
+        &record,
+        &json!([{"op": "set_translation", "region": 7, "text": null}]),
+        &page,
+    );
+    let record = result["record"].as_str().unwrap();
+    let workbench = Workbench::new(&font, None).unwrap();
+    let preview = workbench.preview(record, &page).unwrap();
+    let document: Value = serde_json::from_str(&preview.json).unwrap();
+    assert_eq!(document["erase"].as_array().unwrap().len(), 0);
+    assert_eq!(document["clean"][0]["bounds"], rect(90, 60, 20, 5));
+    let patch = document["clean"][0]["image"].as_u64().unwrap() as usize;
+    let pixels = image::load_from_memory(&preview.images[patch])
+        .unwrap()
+        .to_rgba8();
+    assert_eq!(pixels.get_pixel(0, 0).0, [255, 255, 255, 255]);
+    let kept = edit(
+        record,
+        &json!([{"op": "set_preserved", "region": 7, "preserved": true}]),
+        &page,
+    );
+    let preview = workbench
+        .preview(kept["record"].as_str().unwrap(), &page)
+        .unwrap();
+    let document: Value = serde_json::from_str(&preview.json).unwrap();
+    assert!(document["clean"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn shrinking_the_erase_mask_shrinks_the_preview_patch() {
     let Some(font) = font() else {
         eprintln!("skipped: set CAMEL_TEST_FONT to a CJK font");

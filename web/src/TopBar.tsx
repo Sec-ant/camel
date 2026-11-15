@@ -1,3 +1,5 @@
+import { language, t } from "./i18n.ts";
+import { LanguageSelect } from "./LanguageSelect.tsx";
 // Title bar (screens, running job) and the toolbar row: page readouts, warnings, save state,
 // navigation, undo/redo.
 
@@ -35,7 +37,7 @@ const SAVE_LABELS = {
 } as const;
 
 function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return language.value === "en" ? `${count} ${noun}${count === 1 ? "" : "s"}` : `${count} ${t(noun)}`;
 }
 
 // The short form (`U4`, as in the page list) replaces the label where the toolbar is narrow.
@@ -61,7 +63,7 @@ function ScreenLink({ target, label }: { target: View; label: string }) {
       aria-current={current ? "page" : undefined}
       onClick={() => (view.value = current && target !== "main" ? "main" : target)}
     >
-      {label}
+      {t(label)}
     </button>
   );
 }
@@ -74,7 +76,7 @@ function JobBadge() {
   const { finished, total } = job.progress.units;
   return (
     <span class="title-job mono" aria-live="polite">
-      {job.title.toUpperCase()} {finished} / {total}
+      {t(job.title).toUpperCase()} {finished} / {total}
     </span>
   );
 }
@@ -89,7 +91,8 @@ export function TitleBar() {
       </h1>
       <span class="title-links">
         <JobBadge />
-        <nav class="title-nav" aria-label="Screens">
+        <LanguageSelect />
+        <nav class="title-nav" aria-label={t("Screens")}>
           <ScreenLink target="main" label={open ? "Workbench" : "Projects"} />
           {open && <ScreenLink target="jobs" label="Jobs" />}
           <ScreenLink target="settings" label="Settings" />
@@ -99,14 +102,13 @@ export function TitleBar() {
             type="button"
             class="title-link"
             onClick={() => {
-              if (jobRunning() && !confirm("A job is running. Leaving stops it; running it again resumes. Leave?")) return;
+              if (jobRunning() && !confirm(t("A job is running. Leaving stops it; running it again resumes. Leave?"))) return;
               void flushFields().then(() => {
                 location.href = location.pathname;
               });
             }}
           >
-            Open another project
-          </button>
+            {t("Open another project")}</button>
         )}
         {open && view.value === "main" && (
           <button
@@ -116,8 +118,7 @@ export function TitleBar() {
             aria-controls="shortcut-sheet"
             onClick={() => (helpOpen.value = !helpOpen.value)}
           >
-            Keyboard shortcuts (?)
-          </button>
+            {t("Keyboard shortcuts (?)")}</button>
         )}
       </span>
     </header>
@@ -137,8 +138,7 @@ export function Toolbar() {
     <div class="toolbar">
       <div class="readouts">
         <label class="readout mono">
-          PAGE
-          <PageInput index={index} count={count} />
+          {t("PAGE")}<PageInput index={index} count={count} />
           <span class="dim">/ {count}</span>
         </label>
         <span class="mono dim source-name" title={summary?.source_name}>
@@ -146,7 +146,7 @@ export function Toolbar() {
         </span>
         {summary &&
           (summary.preserve_original ? (
-            <span class="tag-inverse">page kept original</span>
+            <span class="tag-inverse">{t("page kept original")}</span>
           ) : (
             <>
               {summary.missing > 0 && <CountTag count={summary.missing} noun="missing translation" code="M" />}
@@ -162,33 +162,31 @@ export function Toolbar() {
       </div>
       <div class="buttons">
         <span class="save-state mono" data-state={state} aria-live="polite">
-          {SAVE_LABELS[state]}
+          {t(SAVE_LABELS[state])}
         </span>
         {activeSession()?.location === "overlay" && (
           <button
             type="button"
             class="button"
-            title="Download the locally edited files as a zip to unpack over the project folder"
+            title={t("Download the locally edited files as a zip to unpack over the project folder")}
             disabled={localChanges.value === 0}
             onClick={() => void downloadChanges()}
           >
-            Download changes ({localChanges.value})
+            {t("Download changes (")}{localChanges.value})
           </button>
         )}
         {activeSession()?.location === "overlay" && localChanges.value > 0 && (
           <button type="button" class="link" onClick={() => void discardChanges()}>
-            Discard
-          </button>
+            {t("Discard")}</button>
         )}
         {activeSession()?.location === "browser" && (
           <button
             type="button"
             class="button"
-            title="Download the project kept in this browser as a zip"
+            title={t("Download the project kept in this browser as a zip")}
             onClick={() => void downloadProject()}
           >
-            Download project
-          </button>
+            {t("Download project")}</button>
         )}
         <button
           type="button"
@@ -199,32 +197,25 @@ export function Toolbar() {
             savePreferences();
           }}
         >
-          Pages
-        </button>
-        <button type="button" class="button" title="Previous page (←)" disabled={index <= 0} onClick={() => stepPage(-1)}>
-          Prev
-        </button>
+          {t("Pages")}</button>
+        <button type="button" class="button" title={t("Previous page (←)")} disabled={index <= 0} onClick={() => stepPage(-1)}>
+          {t("Prev")}</button>
         <button
           type="button"
           class="button"
-          title="Next page (→)"
+          title={t("Next page (→)")}
           disabled={index >= count - 1}
           onClick={() => stepPage(1)}
         >
-          Next
-        </button>
-        <button type="button" class="button" title="Previous page to do (⇧←)" onClick={() => stepFilteredPage(-1)}>
-          Prev to-do
-        </button>
-        <button type="button" class="button" title="Next page to do (⇧→)" onClick={() => stepFilteredPage(1)}>
-          Next to-do
-        </button>
-        <button type="button" class="button" title="Undo (⌘Z)" disabled={!history?.undo} onClick={() => void undo()}>
-          Undo
-        </button>
-        <button type="button" class="button" title="Redo (⇧⌘Z)" disabled={!history?.redo} onClick={() => void redo()}>
-          Redo
-        </button>
+          {t("Next")}</button>
+        <button type="button" class="button" title={t("Previous page to do (⇧←)")} onClick={() => stepFilteredPage(-1)}>
+          {t("Prev to-do")}</button>
+        <button type="button" class="button" title={t("Next page to do (⇧→)")} onClick={() => stepFilteredPage(1)}>
+          {t("Next to-do")}</button>
+        <button type="button" class="button" title={t("Undo (⌘Z)")} disabled={!history?.undo} onClick={() => void undo()}>
+          {t("Undo")}</button>
+        <button type="button" class="button" title={t("Redo (⇧⌘Z)")} disabled={!history?.redo} onClick={() => void redo()}>
+          {t("Redo")}</button>
       </div>
     </div>
   );
@@ -243,7 +234,7 @@ function PageInput({ index, count }: { index: number; count: number }) {
       class="page-input mono"
       type="text"
       inputMode="numeric"
-      aria-label="Page number"
+      aria-label={t("Page number")}
       value={value}
       size={4}
       onInput={(event) => setValue((event.currentTarget as HTMLInputElement).value)}

@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Right-hand inspector: region list, selected region properties, new-region draft, page
 // section.
 
@@ -59,15 +60,15 @@ export function Inspector() {
   const page = doc.value;
   if (!page) {
     return (
-      <aside class="inspector" aria-label="Inspector">
-        <p class="helper pad">Loading…</p>
+      <aside class="inspector" aria-label={t("Inspector")}>
+        <p class="helper pad">{t("Loading…")}</p>
       </aside>
     );
   }
   const region = selectedRegion.value;
   const pending = draft.value;
   return (
-    <aside class="inspector" aria-label="Inspector">
+    <aside class="inspector" aria-label={t("Inspector")}>
       <RegionList page={page} />
       <div class="inspector-scroll">
         {pending ? (
@@ -76,9 +77,7 @@ export function Inspector() {
           <RegionDetail key={region.id} region={region} order={page.regions.indexOf(region) + 1} />
         ) : (
           <p class="helper pad">
-            Click a region on the canvas, or press <kbd>J</kbd> / <kbd>K</kbd> to step through
-            regions. Press <kbd>R</kbd> and drag to add one.
-          </p>
+            {t("Click a region on the canvas, or press")}{" "}<kbd>J</kbd> / <kbd>K</kbd> {t("to step through regions. Press")}{" "}<kbd>R</kbd> {t("and drag to add one.")}</p>
         )}
         <PageSection page={page} />
       </div>
@@ -99,20 +98,19 @@ function RegionList({ page }: { page: PageDocument }) {
     <section class="region-list" aria-labelledby="regions-title">
       <div class="section-head">
         <h2 id="regions-title">
-          Regions <span class="dim">{page.regions.length}</span>
+          {t("Regions")}{" "}<span class="dim">{page.regions.length}</span>
         </h2>
         <button
           type="button"
           class="button small"
-          title="Draw a new region (R)"
+          title={t("Draw a new region (R)")}
           aria-pressed={tool.value === "rect"}
           onClick={() => (tool.value = "rect")}
         >
-          + Add
-        </button>
+          {t("+ Add")}</button>
       </div>
       {page.regions.length === 0 ? (
-        <p class="helper pad">No dialogue regions on this page.</p>
+        <p class="helper pad">{t("No dialogue regions on this page.")}</p>
       ) : (
         <ol ref={listRef} class="rows">
           {page.regions.map((region, order) => {
@@ -125,18 +123,18 @@ function RegionList({ page }: { page: PageDocument }) {
                   type="button"
                   class="row"
                   aria-current={region.id === selected}
-                  title={codes.join(" · ")}
+                  title={codes.map(t).join(" · ")}
                   onClick={() => selectRegion(region.id)}
                 >
                   <span class="mono row-number">{order + 1}</span>
                   <span
                     class="row-text"
-                    lang={region.translation === null ? "en" : "zh-Hans"}
+                    lang={region.translation === null ? "en" : ""}
                     data-missing={region.translation === null ? "" : undefined}
                   >
                     {text}
                   </span>
-                  <span class="mono row-code">{codes[0] ?? ""}</span>
+                  <span class="mono row-code">{codes[0] ? t(codes[0]) : ""}</span>
                 </button>
               </li>
             );
@@ -261,21 +259,20 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
       <div class="panel">
         <div class="panel-head">
           <h3 id={`${prefix}-title`}>
-            Region <span class="mono">{order}</span> properties
-          </h3>
+            {t("Region")}{" "}<span class="mono">{order}</span> {t("properties")}</h3>
           <RemoveRegion region={region} />
         </div>
-        {region.speaker && <p class="helper">Speaker: {region.speaker}</p>}
+        {region.speaker && <p class="helper">{t("Speaker:")}{" "}{region.speaker}</p>}
 
         <div class="field">
           <div class="field-label">
-            <label for={`${prefix}-translation`}>Translation</label>
-            <span class="mono dim">{origin}</span>
+            <label for={`${prefix}-translation`}>{t("Translation")}</label>
+            <span class="mono dim">{region.model ?? t(origin)}</span>
           </div>
           <CommitText
             id={`${prefix}-translation`}
             class="translation"
-            lang="zh-Hans"
+            lang=""
             rows={4}
             value={region.translation ?? ""}
             focusKey="translation"
@@ -288,13 +285,12 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
             }}
           />
           <p id={`${prefix}-translation-hint`} class="helper">
-            ⌘↵ save · Esc revert · Tab next region. Line breaks are kept in the layout.
-          </p>
+            {t("⌘↵ save · Esc revert · Tab next region. Line breaks are kept in the layout.")}</p>
         </div>
 
         <div class="field">
           <div class="field-label">
-            <label for={`${prefix}-source`}>Source (OCR)</label>
+            <label for={`${prefix}-source`}>{t("Source (OCR)")}</label>
           </div>
           <CommitText
             id={`${prefix}-source`}
@@ -306,8 +302,7 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
           />
           {lowWords.length > 0 && (
             <p class="helper">
-              Low confidence:
-              {lowWords.map((word, at) => (
+              {t("Low confidence:")}{lowWords.map((word, at) => (
                 <span key={at} class="low-word mono">
                   {word.text} {Math.round(word.confidence)}%
                 </span>
@@ -316,17 +311,16 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
           )}
           {suggestion && (
             <div class="suggestion">
-              <p class="helper">Model reading: {suggestion}</p>
+              <p class="helper">{t("Model reading:")}{" "}{suggestion}</p>
               <button
                 type="button"
                 class="button small"
                 onClick={() => void submit([{ op: "set_source", region: region.id, text: suggestion }])}
               >
-                Use
-              </button>
+                {t("Use")}</button>
             </div>
           )}
-          <p class="helper">Corrects the OCR text for future translation runs.</p>
+          <p class="helper">{t("Corrects the OCR text for future translation runs.")}</p>
         </div>
       </div>
 
@@ -343,7 +337,7 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
       <FillSection region={region} />
 
       <fieldset class="group">
-        <legend>Output</legend>
+        <legend>{t("Output")}</legend>
         <label class="check">
           <input
             type="checkbox"
@@ -358,9 +352,8 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
               ])
             }
           />
-          Keep original lettering
-        </label>
-        <p class="helper">Kept regions are neither erased nor typeset on export.</p>
+          {t("Keep original lettering")}</label>
+        <p class="helper">{t("Kept regions are neither erased nor typeset on export.")}</p>
       </fieldset>
     </section>
   );
@@ -385,9 +378,9 @@ function FontSize({ region, layout }: { region: Region; layout: Layout | undefin
   };
   return (
     <fieldset class="group">
-      <legend>Typesetting</legend>
+      <legend>{t("Typesetting")}</legend>
       <div class="property">
-        <label for={`font-${region.id}`}>Font size</label>
+        <label for={`font-${region.id}`}>{t("Font size")}</label>
         <span class="unit-input">
           <input
             id={`font-${region.id}`}
@@ -410,7 +403,7 @@ function FontSize({ region, layout }: { region: Region; layout: Layout | undefin
         max={FONT_MAX}
         step={1}
         value={text}
-        aria-label="Font size"
+        aria-label={t("Font size")}
         onInput={(event) => setText((event.currentTarget as HTMLInputElement).value)}
         onChange={(event) => apply((event.currentTarget as HTMLInputElement).value)}
       />
@@ -424,14 +417,12 @@ function FontSize({ region, layout }: { region: Region; layout: Layout | undefin
             void submit([{ op: "set_font_size", region: region.id, size: auto ? null : size }]);
           }}
         />
-        Automatic size
-      </label>
+        {t("Automatic size")}</label>
       <p class="helper">
         {layout
           ? `Current layout: ${layout.font_size} px · ${layout.lines.length} ${layout.lines.length === 1 ? "line" : "lines"}.`
-          : "No layout for this region yet."}{" "}
-        Moving the size or slider sets a manual size.
-      </p>
+          : t("No layout for this region yet.")}{" "}
+        {t("Moving the size or slider sets a manual size.")}</p>
     </fieldset>
   );
 }
@@ -459,22 +450,22 @@ function FillSection({ region }: { region: Region }) {
 
   return (
     <fieldset class="group">
-      <legend>Erase &amp; fill</legend>
+      <legend>{t("Erase & fill")}</legend>
       <div class="property">
-        <span>Fill</span>
+        <span>{t("Fill")}</span>
         <span class="mono fill-value">
           {current && <span class="swatch" style={`background:${current}`} />}
-          {FILL_LABELS[fill.kind].toUpperCase()}
+          {t(FILL_LABELS[fill.kind]).toUpperCase()}
           {current && ` ${current}`}
         </span>
       </div>
       {region.background_issue && (
         <p class="alert" role="status">
-          <span class="mono">BG ISSUE</span> {region.background_issue}
+          <span class="mono">{t("BG ISSUE")}</span> {region.background_issue}
         </p>
       )}
       <div class="property">
-        <label for={`fill-${region.id}`}>Flat colour</label>
+        <label for={`fill-${region.id}`}>{t("Flat colour")}</label>
         <span class="buttons">
           <input
             id={`fill-${region.id}`}
@@ -488,24 +479,21 @@ function FillSection({ region }: { region: Region }) {
           />
           {fill.kind !== "flat" && (
             <button type="button" class="button small" onClick={() => apply(shown)}>
-              Use flat fill
-            </button>
+              {t("Use flat fill")}</button>
           )}
           <button
             type="button"
             class="button small"
             aria-pressed={tool.value === "pick"}
-            title="Pick the colour from the page (I)"
+            title={t("Pick the colour from the page (I)")}
             onClick={() => (tool.value = "pick")}
           >
-            Pick
-          </button>
+            {t("Pick")}</button>
         </span>
       </div>
       <p class="helper">
-        Mask <span class="mono">{eraseArea.toLocaleString("en-US")}</span> px · layout area{" "}
-        <span class="mono">{interiorArea.toLocaleString("en-US")}</span> px. Paint them with B and L.
-      </p>
+        {t("Mask")}{" "}<span class="mono">{eraseArea.toLocaleString("en-US")}</span> {t("px · layout area")}{" "}
+        <span class="mono">{interiorArea.toLocaleString("en-US")}</span> {t("px. Paint them with B and L.")}</p>
     </fieldset>
   );
 }
@@ -515,23 +503,20 @@ function RemoveRegion({ region }: { region: Region }) {
   if (!confirming) {
     return (
       <button type="button" class="link" onClick={() => setConfirming(true)}>
-        Remove
-      </button>
+        {t("Remove")}</button>
     );
   }
   return (
-    <span class="confirm" role="group" aria-label="Confirm removal">
+    <span class="confirm" role="group" aria-label={t("Confirm removal")}>
       <button
         type="button"
         class="button small inverse"
         ref={(element) => element?.focus()}
         onClick={() => void submit([{ op: "remove_region", region: region.id }])}
       >
-        Remove region
-      </button>
+        {t("Remove region")}</button>
       <button type="button" class="link" onClick={() => setConfirming(false)}>
-        Cancel
-      </button>
+        {t("Cancel")}</button>
     </span>
   );
 }
@@ -584,18 +569,16 @@ function DraftPanel() {
   return (
     <section class="panel" aria-labelledby="draft-title">
       <div class="panel-head">
-        <h3 id="draft-title">New region</h3>
+        <h3 id="draft-title">{t("New region")}</h3>
         <button type="button" class="link" onClick={() => (draft.value = null)}>
-          Cancel
-        </button>
+          {t("Cancel")}</button>
       </div>
       <p class="helper mono">
         X {x} Y {y} · {width} × {height} px
       </p>
       <div class="field">
         <label class="field-label" for="draft-source">
-          Source
-        </label>
+          {t("Source")}</label>
         <textarea
           ref={sourceRef}
           id="draft-source"
@@ -608,12 +591,11 @@ function DraftPanel() {
       </div>
       <div class="field">
         <label class="field-label" for="draft-translation">
-          Translation (optional)
-        </label>
+          {t("Translation (optional)")}</label>
         <textarea
           id="draft-translation"
           class="translation"
-          lang="zh-Hans"
+          lang=""
           rows={3}
           value={translation}
           onInput={(event) => setTranslation((event.currentTarget as HTMLTextAreaElement).value)}
@@ -621,13 +603,10 @@ function DraftPanel() {
         />
       </div>
       <p class="helper">
-        Bubble shape, erase mask and fill are derived from the page; fix them with the brushes
-        afterwards. ⌘↵ creates, Esc cancels.
-      </p>
+        {t("Bubble shape, erase mask and fill are derived from the page; fix them with the brushes afterwards. ⌘↵ creates, Esc cancels.")}</p>
       <div class="buttons">
         <button type="button" class="button inverse" onClick={() => void create()}>
-          Create region
-        </button>
+          {t("Create region")}</button>
       </div>
     </section>
   );
@@ -647,7 +626,7 @@ function RegionReview({ region }: { region: Region }) {
   return (
     <fieldset class="group">
       <legend>
-        Review <span class="mono dim">{items.length}</span>
+        {t("Review")}{" "}<span class="mono dim">{items.length}</span>
       </legend>
       <ol class="review-items">
         {items.map((item, at) => {
@@ -657,13 +636,13 @@ function RegionReview({ region }: { region: Region }) {
             <li key={at} class="review-item">
               <span class="mono review-label">{item.label}</span>
               <p>{item.reason}</p>
-              {item.evidence && <p class="helper">Evidence: {item.evidence}</p>}
+              {item.evidence && <p class="helper">{t("Evidence:")}{" "}{item.evidence}</p>}
               {item.suggestion !== null && (
-                <p class="review-suggestion" lang="zh-Hans">
+                <p class="review-suggestion" lang="">
                   {item.suggestion}
                 </p>
               )}
-              {changed && <p class="helper">The translation has changed since this report.</p>}
+              {changed && <p class="helper">{t("The translation has changed since this report.")}</p>}
               <div class="buttons">
                 {applied ? (
                   <span class="mono dim">APPLIED</span>
@@ -673,16 +652,14 @@ function RegionReview({ region }: { region: Region }) {
                     class="button small"
                     onClick={() => void submit([{ op: "set_translation", region: region.id, text: item.suggestion }])}
                   >
-                    Apply suggestion
-                  </button>
+                    {t("Apply suggestion")}</button>
                 ) : (
                   <button
                     type="button"
                     class="button small"
                     onClick={() => (focusRequest.value = { field: "translation", region: region.id })}
                   >
-                    Edit translation
-                  </button>
+                    {t("Edit translation")}</button>
                 )}
               </div>
             </li>
@@ -704,7 +681,7 @@ function PageSection({ page }: { page: PageDocument }) {
   return (
     <section class="page-section" aria-labelledby="page-section-title">
       <div class="section-head">
-        <h2 id="page-section-title">Page</h2>
+        <h2 id="page-section-title">{t("Page")}</h2>
       </div>
       <div class="panel">
         <label class="check">
@@ -717,15 +694,14 @@ function PageSection({ page }: { page: PageDocument }) {
               ])
             }
           />
-          Keep whole page original
-        </label>
-        <p class="helper">For covers, credits and sound-effect pages.</p>
+          {t("Keep whole page original")}</label>
+        <p class="helper">{t("For covers, credits and sound-effect pages.")}</p>
       </div>
 
       {items.length > 0 && (
         <fieldset class="group">
           <legend>
-            Review items <span class="mono dim">{items.length}</span>
+            {t("Review items")}{" "}<span class="mono dim">{items.length}</span>
           </legend>
           <ol class="candidates">
             {items.map((item, at) => {
@@ -733,12 +709,11 @@ function PageSection({ page }: { page: PageDocument }) {
               return (
                 <li key={at}>
                   <span class="candidate-text">
-                    <span class="mono dim">{order > 0 ? `#${order}` : "REMOVED"}</span> {item.label}
+                    <span class="mono dim">{order > 0 ? `#${order}` : t("REMOVED")}</span> {item.label}
                   </span>
                   {order > 0 && (
                     <button type="button" class="button small" onClick={() => selectRegion(item.region)}>
-                      Show
-                    </button>
+                      {t("Show")}</button>
                   )}
                   <span class="helper">{item.reason}</span>
                 </li>
@@ -751,7 +726,7 @@ function PageSection({ page }: { page: PageDocument }) {
       {page.unresolved.length > 0 && (
         <fieldset class="group">
           <legend>
-            Unresolved candidates <span class="mono dim">{page.unresolved.length}</span>
+            {t("Unresolved candidates")}{" "}<span class="mono dim">{page.unresolved.length}</span>
           </legend>
           <ol ref={listRef} class="candidates">
             {page.unresolved.map((candidate) => (
@@ -762,7 +737,7 @@ function PageSection({ page }: { page: PageDocument }) {
                 onMouseLeave={() => (hoveredUnresolved.value = null)}
               >
                 <span class="candidate-text">
-                  <span class="mono dim">?{candidate.id}</span> {candidate.text || "(no text)"}
+                  <span class="mono dim">?{candidate.id}</span> {candidate.text || t("(no text)")}
                 </span>
                 <button
                   type="button"
@@ -776,12 +751,11 @@ function PageSection({ page }: { page: PageDocument }) {
                     })
                   }
                 >
-                  Promote
-                </button>
+                  {t("Promote")}</button>
                 <button
                   type="button"
                   class="button small"
-                  title="Not lettering: remove it from the to-do list"
+                  title={t("Not lettering: remove it from the to-do list")}
                   onFocus={() => (hoveredUnresolved.value = candidate.id)}
                   onBlur={() => (hoveredUnresolved.value = null)}
                   onClick={() => {
@@ -789,8 +763,7 @@ function PageSection({ page }: { page: PageDocument }) {
                     void submit([{ op: "dismiss_unresolved", unresolved: candidate.id }]);
                   }}
                 >
-                  Dismiss
-                </button>
+                  {t("Dismiss")}</button>
                 <span class="helper">{candidate.reason}</span>
               </li>
             ))}
@@ -801,10 +774,10 @@ function PageSection({ page }: { page: PageDocument }) {
       {page.issues.length > 0 && (
         <fieldset class="group">
           <legend>
-            Issues <span class="mono dim">{page.issues.length}</span>
+            {t("Issues")}{" "}<span class="mono dim">{page.issues.length}</span>
           </legend>
           <details>
-            <summary>Show raw issue log</summary>
+            <summary>{t("Show raw issue log")}</summary>
             <ul class="issues mono">
               {page.issues.map((issue, at) => (
                 <li key={at}>{issue}</li>
@@ -816,7 +789,7 @@ function PageSection({ page }: { page: PageDocument }) {
 
       {page.scene_summary && (
         <fieldset class="group">
-          <legend>Scene summary</legend>
+          <legend>{t("Scene summary")}</legend>
           <p class="helper scene">{page.scene_summary}</p>
         </fieldset>
       )}

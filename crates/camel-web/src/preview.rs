@@ -10,7 +10,7 @@ use camel::{
 };
 use camel_project::{
     Record,
-    render::{RetainReason, plan_page},
+    render::{RetainReason, native_glyph_masks, overlaps_original, plan_page},
 };
 use image::{
     ImageEncoder as _, RgbImage, RgbaImage,
@@ -22,6 +22,8 @@ use serde::Serialize;
 #[derive(Debug, Serialize)]
 pub(crate) struct PreviewDocument {
     erase: Vec<Patch>,
+    clean: Vec<Patch>,
+    clean_error: Option<String>,
     text: Vec<Patch>,
     layouts: Vec<LayoutView>,
     retained: Vec<RetainedView>,
@@ -102,6 +104,49 @@ pub(crate) fn render(
         );
     }
     let (layers, erasures) = plan.rendered.unwrap_or_default();
+    let mut skipped: Vec<_> = record
+        .page
+        .regions
+        .iter()
+        .map(|region| {
+            record.preserve_original
+                || record.preserved_regions.contains(&region.block.id)
+                || native_glyph_masks(record.analysis.as_ref()) && region.bubble.glyphs.is_empty()
+        })
+        .collect();
+    loop {
+        let overlaps: Vec<_> = record
+            .page
+            .regions
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !skipped[*i])
+            .filter(|(_, region)| {
+                record
+                    .page
+                    .regions
+                    .iter()
+                    .enumerate()
+                    .any(|(j, other)| skipped[j] && overlaps_original(region, other))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if overlaps.is_empty() {
+            break;
+        }
+        for i in overlaps {
+            skipped[i] = true;
+        }
+    }
+    let selected: Vec<_> = record
+        .page
+        .regions
+        .iter()
+        .zip(skipped)
+        .filter_map(|(region, skip)| (!skip).then_some(region))
+        .collect();
+    let clean_erasures =
+        geometry::prepare_erasures(source, selected.iter().map(|region| &region.bubble));
     let mut images = Vec::with_capacity(layers.len() + erasures.len());
     let mut erase = Vec::with_capacity(erasures.len());
     for (region, prepared) in erasures {
@@ -114,6 +159,23 @@ pub(crate) fn render(
             images.push(png(&layer.image)?);
         }
     }
+    let mut clean = Vec::new();
+    let clean_error = match clean_erasures {
+        Ok(erasures) => {
+            for (region, prepared) in selected.into_iter().zip(erasures) {
+                if let Some(layer) = prepared.layer() {
+                    clean.push(Patch {
+                        region: region.block.id,
+                        bounds: layer.bounds,
+                        image: images.len(),
+                    });
+                    images.push(png(&layer.image)?);
+                }
+            }
+            None
+        }
+        Err(error) => Some(error.to_string()),
+    };
     let mut text = Vec::with_capacity(layers.len());
     let mut layouts = Vec::with_capacity(layers.len());
     for TextLayer {
@@ -137,6 +199,8 @@ pub(crate) fn render(
     }
     let document = PreviewDocument {
         erase,
+        clean,
+        clean_error,
         text,
         layouts,
         retained,

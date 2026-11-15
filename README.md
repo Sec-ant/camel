@@ -20,6 +20,8 @@ The sample shows *Invincible* translated into Simplified Chinese. Artwork belong
 3. Choose **Analyze and edit** to detect text and enter the workbench. Camel downloads the default models and font when needed; you can choose your own in advanced setup.
 4. In **Settings**, enter your API URL, model, API key, and target language. The API must allow cross-origin browser requests. Use **Jobs** to translate and export.
 
+The workbench interface is available in English, Simplified Chinese, Japanese, French, and Spanish. Choose a language in the title bar; this is separate from the translation target language.
+
 CBZ/ZIP, CBR/RAR, PNG and JPEG are supported; PDF is not currently supported. Browser projects can be downloaded as ZIP files. The default recognition models are:
 
 | File | Model |

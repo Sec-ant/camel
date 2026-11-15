@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Settings screen: the translation service, its API key (this browser only) and run defaults,
 // with import/export of the CLI's config.json.
 
@@ -83,7 +84,7 @@ export function SettingsScreen() {
     try {
       await saveSettings(collect(), apiKey);
       setDirty(false);
-      setStatus({ text: "Saved in this browser", tone: "info" });
+      setStatus({ text: t("Saved in this browser"), tone: "info" });
     } catch (error) {
       setStatus({ text: error instanceof Error ? error.message : String(error), tone: "error" });
     }
@@ -146,53 +147,51 @@ export function SettingsScreen() {
         }}
       >
         <div class="section-head">
-          <h2 id="settings-title">Settings</h2>
-          <span class="mono dim">STORED IN THIS BROWSER</span>
+          <h2 id="settings-title">{t("Settings")}</h2>
+          <span class="mono dim">{t("STORED IN THIS BROWSER")}</span>
         </div>
 
         <fieldset class="group" disabled={!loaded}>
-          <legend>Translation service</legend>
-          <p class="helper">Any OpenAI-compatible chat completions service that accepts requests from this page.</p>
+          <legend>{t("Translation service")}</legend>
+          <p class="helper">{t("Any OpenAI-compatible chat completions service that accepts requests from this page.")}</p>
           <label class="form-row">
-            <span>Base URL</span>
+            <span>{t("Base URL")}</span>
             <input class="text-input mono" type="url" placeholder="https://…/v1" spellcheck={false} {...text("base_url")} />
           </label>
           <label class="form-row">
-            <span>Model</span>
+            <span>{t("Model")}</span>
             <input class="text-input mono" type="text" spellcheck={false} {...text("model")} />
           </label>
           <label class="form-row">
-            <span>Fallback model</span>
+            <span>{t("Fallback model")}</span>
             <input
               class="text-input mono"
               type="text"
               spellcheck={false}
-              placeholder="None"
+              placeholder={t("None")}
               aria-describedby="fallback-hint"
               {...text("fallback_model")}
             />
           </label>
           <p id="fallback-hint" class="helper form-hint">
-            Used when the preferred model stays unavailable or cannot finish a reply.
-          </p>
+            {t("Used when the preferred model stays unavailable or cannot finish a reply.")}</p>
           <div class="form-row">
-            <label for="api-key">API key</label>
+            <label for="api-key">{t("API key")}</label>
             <span class="input-with-button">
               {showKey ? <input type="text" {...keyField} /> : <input type="password" {...keyField} />}
               <button type="button" class="button" aria-pressed={showKey} onClick={() => setShowKey(!showKey)}>
-                {showKey ? "Hide" : "Show"}
+                {showKey ? t("Hide") : t("Show")}
               </button>
             </span>
           </div>
           <p id="key-hint" class="helper form-hint">
-            Kept in this browser's storage only: never written to a project or to an exported config.json.
-          </p>
+            {t("Kept in this browser's storage only: never written to a project or to an exported config.json.")}</p>
         </fieldset>
 
         <fieldset class="group" disabled={!loaded}>
-          <legend>Translation</legend>
+          <legend>{t("Translation")}</legend>
           <label class="form-row">
-            <span>Target language</span>
+            <span>{t("Target language")}</span>
             <input class="text-input mono short" type="text" spellcheck={false} {...text("target_language")} />
           </label>
           <label class="check">
@@ -201,22 +200,21 @@ export function SettingsScreen() {
               checked={draft.text_only}
               onChange={(event) => update("text_only", (event.currentTarget as HTMLInputElement).checked)}
             />
-            Text only: translate OCR without page images or visual corrections
-          </label>
+            {t("Text only: translate OCR without page images or visual corrections")}</label>
           <div class="field">
-            <label for="prompt-template">Prompt template</label>
+            <label for="prompt-template">{t("Prompt template")}</label>
             <textarea
               id="prompt-template"
               class="code prompt"
               rows={6}
               spellcheck={false}
-              placeholder="Empty: the built-in prompt"
+              placeholder={t("Empty: the built-in prompt")}
               value={draft.prompt}
               onInput={(event) => update("prompt", (event.currentTarget as HTMLTextAreaElement).value)}
             />
           </div>
           <div class="field">
-            <label for="variables">Variables</label>
+            <label for="variables">{t("Variables")}</label>
             <textarea
               id="variables"
               class="code"
@@ -229,10 +227,10 @@ export function SettingsScreen() {
                 setDirty(true);
               }}
             />
-            <p class="helper">JSON object of template variables (strings).</p>
+            <p class="helper">{t("JSON object of template variables (strings).")}</p>
           </div>
           <div class="field">
-            <label for="request-options">Request options</label>
+            <label for="request-options">{t("Request options")}</label>
             <textarea
               id="request-options"
               class="code"
@@ -245,14 +243,14 @@ export function SettingsScreen() {
                 setDirty(true);
               }}
             />
-            <p class="helper">Extra fields for every request body; model, messages and stream are set by Camel.</p>
+            <p class="helper">{t("Extra fields for every request body; model, messages and stream are set by Camel.")}</p>
           </div>
         </fieldset>
 
         <fieldset class="group" disabled={!loaded}>
-          <legend>Runs</legend>
+          <legend>{t("Runs")}</legend>
           <label class="form-row">
-            <span>Jobs</span>
+            <span>{t("Jobs")}</span>
             <input
               class="number mono"
               type="number"
@@ -262,40 +260,34 @@ export function SettingsScreen() {
               onInput={(event) => update("jobs", Number((event.currentTarget as HTMLInputElement).value))}
             />
           </label>
-          <p class="helper form-hint">Concurrent scenes when translating, batches when preparing, groups when auditing.</p>
+          <p class="helper form-hint">{t("Concurrent scenes when translating, batches when preparing, groups when auditing.")}</p>
           <label class="check">
             <input
               type="checkbox"
               checked={draft.cache}
               onChange={(event) => update("cache", (event.currentTarget as HTMLInputElement).checked)}
             />
-            Reuse validated responses from the project cache
-          </label>
+            {t("Reuse validated responses from the project cache")}</label>
         </fieldset>
 
         <fieldset class="group">
-          <legend>CLI configuration</legend>
+          <legend>{t("CLI configuration")}</legend>
           <p class="helper">
-            Import or export the <span class="mono">translation</span> section of the CLI's config.json. The
-            API key and the prompt template stay out of it: the CLI reads them from their own files.
-          </p>
+            {t("Import or export the")}{" "}<span class="mono">translation</span> {t("section of the CLI's config.json. The API key and the prompt template stay out of it: the CLI reads them from their own files.")}</p>
           <div class="buttons">
             <button type="button" class="button" onClick={() => void importFile()}>
-              Import config.json…
-            </button>
+              {t("Import config.json…")}</button>
             <button type="button" class="button" onClick={exportFile}>
-              Export config.json
-            </button>
+              {t("Export config.json")}</button>
           </div>
         </fieldset>
 
         <div class="open-actions">
           <p class={status?.tone === "error" ? "alert form-status" : "helper"} role="status">
-            {status?.text ?? (dirty ? "Unsaved changes" : "")}
+            {status?.text ?? (dirty ? t("Unsaved changes") : "")}
           </p>
           <button type="submit" class="button inverse" disabled={!loaded || !dirty}>
-            Save settings
-          </button>
+            {t("Save settings")}</button>
         </div>
       </form>
     </main>

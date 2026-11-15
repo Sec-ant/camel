@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Live view of the current job: progress, page map, errors and log. Shared by the Jobs screen
 // and the New project screen (analysis).
 
@@ -54,9 +55,9 @@ export function JobView(props: { onPage?: (index: number) => void }) {
   const eta = running ? progress.eta(now) : null;
   const elapsed = (job.finished ?? now) - job.started;
   const readout = [
-    `${running ? VERBS[job.kind] : job.title} ${units.finished} / ${units.total} ${units.label}`,
-    job.workers > 1 ? `${job.workers} workers` : null,
-    eta === null ? null : `ETA ${formatDuration(eta)}`,
+    `${t(running ? VERBS[job.kind] : job.title)} ${units.finished} / ${units.total} ${t(units.label)}`,
+    job.workers > 1 ? `${job.workers} ${t("workers")}` : null,
+    eta === null ? null : `${t("ETA")} ${formatDuration(eta)}`,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -65,16 +66,15 @@ export function JobView(props: { onPage?: (index: number) => void }) {
     <section class="job" aria-labelledby="job-title">
       <div class="section-head">
         <h2 id="job-title">
-          {job.title} <span class="dim">{formatDuration(elapsed)}</span>
+          {t(job.title)} <span class="dim">{formatDuration(elapsed)}</span>
         </h2>
         <span class="buttons">
           <span class={job.status === "failed" ? "tag-inverse" : "mono"} data-status={job.status} aria-live="polite">
-            {STATUS_LABELS[job.status]}
+            {t(STATUS_LABELS[job.status])}
           </span>
           {running && (
             <button type="button" class="button" disabled={job.status === "cancelling"} onClick={cancelJob}>
-              Cancel
-            </button>
+              {t("Cancel")}</button>
           )}
         </span>
       </div>
@@ -93,8 +93,8 @@ export function JobView(props: { onPage?: (index: number) => void }) {
           </span>
         </div>
         <p class="mono dim">
-          {progress.counts(job.status === "failed" || job.status === "cancelled")}
-          {progress.scenes.total > 0 && ` · scenes ${progress.scenes.done} / ${progress.scenes.total}`}
+          {[`${progress.done} ${t("done")}`, progress.skipped > 0 ? `${progress.skipped} ${t("already complete")}` : null, progress.failed > 0 ? `${progress.failed} ${t("failed")}` : null, (job.status === "failed" || job.status === "cancelled") && progress.total - progress.done - progress.skipped - progress.failed > 0 ? `${progress.total - progress.done - progress.skipped - progress.failed} ${t("not reached")}` : null].filter(Boolean).join(" · ")}
+          {progress.scenes.total > 0 && ` · ${t("scenes")} ${progress.scenes.done} / ${progress.scenes.total}`}
         </p>
         {job.result && <p class="job-result">{job.result.message}</p>}
         {job.error && (
@@ -107,7 +107,7 @@ export function JobView(props: { onPage?: (index: number) => void }) {
       {progress.problems.length > 0 && (
         <div class="job-errors">
           <h3 class="subhead mono">
-            Problems <span class="dim">{progress.problems.length}</span>
+            {t("Problems")}{" "}<span class="dim">{progress.problems.length}</span>
           </h3>
           <ol class="rows">
             {progress.problems.map((problem, at) => (
@@ -116,10 +116,10 @@ export function JobView(props: { onPage?: (index: number) => void }) {
                   <span class="mono dim">—</span>
                 ) : props.onPage ? (
                   <button type="button" class="link mono" onClick={() => props.onPage!(problem.index!)}>
-                    Page {problem.index + 1}
+                    {t("Page")}{" "}{problem.index + 1}
                   </button>
                 ) : (
-                  <span class="mono">Page {problem.index + 1}</span>
+                  <span class="mono">{t("Page")}{" "}{problem.index + 1}</span>
                 )}
                 <span>
                   {problem.tone === "error" && <span class="log-tag">ERROR</span>} {problem.message}
@@ -144,7 +144,7 @@ function PageMap({ job }: { job: Job }) {
         key={index}
         class="cell"
         data-state={STATE_NAMES[states[index]!]}
-        title={`${index + 1} · ${job.pages[index] ?? ""} · ${STATE_NAMES[states[index]!]}`}
+        title={`${index + 1} · ${job.pages[index] ?? ""} · ${t(STATE_NAMES[states[index]!]!)}`}
       />,
     );
   }
@@ -156,7 +156,7 @@ function PageMap({ job }: { job: Job }) {
       <p class="legend-row mono dim">
         {LEGEND.map(([state, label]) => (
           <span key={state} class="legend-item">
-            <span class="cell" data-state={state} /> {label}
+            <span class="cell" data-state={state} /> {t(label)}
           </span>
         ))}
       </p>
@@ -176,7 +176,7 @@ function Log({ job, onPage }: { job: Job; onPage?: ((index: number) => void) | u
   return (
     <div class="job-log">
       <h3 class="subhead mono">
-        Log <span class="dim">{lines.length}</span>
+        {t("Log")}{" "}<span class="dim">{lines.length}</span>
       </h3>
       <ol
         ref={list}
@@ -188,7 +188,7 @@ function Log({ job, onPage }: { job: Job; onPage?: ((index: number) => void) | u
         }}
       >
         {lines.length === 0 && (
-          <li class="dim">{job.finished === null ? "Waiting for the first message…" : "No messages."}</li>
+          <li class="dim">{job.finished === null ? t("Waiting for the first message…") : t("No messages.")}</li>
         )}
         {lines.map((line, at) => (
           <li key={at} data-tone={line.tone}>

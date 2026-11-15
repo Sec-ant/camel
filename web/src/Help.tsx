@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Shortcut sheet (non-modal; Esc or the title-bar link closes it).
 
 import { helpOpen } from "./state.ts";
@@ -49,24 +50,23 @@ export function HelpSheet() {
   return (
     <div id="shortcut-sheet" class="sheet" role="dialog" aria-labelledby="shortcut-title">
       <div class="section-head">
-        <h2 id="shortcut-title">Keyboard shortcuts</h2>
+        <h2 id="shortcut-title">{t("Keyboard shortcuts")}</h2>
         <button type="button" class="button small" onClick={() => (helpOpen.value = false)}>
-          Close (Esc)
-        </button>
+          {t("Close (Esc)")}</button>
       </div>
       <div class="sheet-body">
         {GROUPS.map((group) => (
-          <fieldset key={group.title} class="group">
-            <legend>{group.title}</legend>
+          <fieldset key={t(group.title)} class="group">
+            <legend>{t(group.title)}</legend>
             <dl>
               {group.items.map(([keys, action]) => (
-                <div key={action} class="shortcut">
+                <div key={t(action)} class="shortcut">
                   <dt>
                     {keys.map((key) => (
                       <kbd key={key}>{key}</kbd>
                     ))}
                   </dt>
-                  <dd>{action}</dd>
+                  <dd>{t(action)}</dd>
                 </div>
               ))}
             </dl>

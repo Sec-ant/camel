@@ -1,3 +1,4 @@
+import { t } from "./i18n.ts";
 // Jobs screen: run the pipeline operations on the open project with their options, follow the
 // current job (progress, page map, errors, log), and reach pages with review items.
 
@@ -174,19 +175,18 @@ export function JobsScreen() {
     <main class="jobs-screen">
       <section class="operations" aria-labelledby="operations-title">
         <div class="section-head">
-          <h2 id="operations-title">Operations</h2>
+          <h2 id="operations-title">{t("Operations")}</h2>
           <button type="button" class="link" onClick={() => (view.value = "settings")}>
-            Settings
-          </button>
+            {t("Settings")}</button>
         </div>
         <p class="helper pad service-line">
           {service === undefined
-            ? "Reading settings…"
+            ? t("Reading settings…")
             : typeof service === "string"
-              ? "Translation service not configured."
+              ? t("Translation service not configured.")
               : `${service.model} · ${service.base_url}${service.text_only ? " · text only" : ""}`}
         </p>
-        <div class="rows" role="radiogroup" aria-label="Operation" onKeyDown={onRadioGroupKey}>
+        <div class="rows" role="radiogroup" aria-label={t("Operation")} onKeyDown={onRadioGroupKey}>
           {OPERATIONS.map((item) => (
             <button
               key={item.id}
@@ -197,30 +197,30 @@ export function JobsScreen() {
               tabIndex={item.id === operation.id ? 0 : -1}
               onClick={() => (selected.value = item.id)}
             >
-              <span>{item.title}</span>
-              {item.service && <span class="mono">SERVICE</span>}
+              <span>{t(item.title)}</span>
+              {item.service && <span class="mono">{t("SERVICE")}</span>}
             </button>
           ))}
         </div>
         <div class="panel operation-options">
           <div class="panel-head">
-            <h3>{operation.title}</h3>
+            <h3>{t(operation.title)}</h3>
           </div>
-          <p class="helper">{operation.note}</p>
+          <p class="helper">{t(operation.note)}</p>
           <Options operation={operation.id} jobs={jobs} />
-          {blocked && <p class="alert form-status">{blocked}</p>}
+          {blocked && <p class="alert form-status">{t(blocked)}</p>}
           <button
             type="button"
             class="button inverse run-button"
             disabled={blocked !== null || !settings}
             onClick={() => void run().catch((error: unknown) => announce(errorMessage(error), "error"))}
           >
-            Run {operation.title.toLowerCase()}
+            {t("Run")}{" "}{t(operation.title)}
           </button>
         </div>
         <Reviews />
       </section>
-      <section class="job-panel" aria-label="Current job">
+      <section class="job-panel" aria-label={t("Current job")}>
         <JobView onPage={goToPage} />
         <EmptyJob />
       </section>
@@ -233,16 +233,14 @@ function EmptyJob() {
   if (currentJob.value) return null;
   return (
     <p class="helper pad empty-job">
-      No job has run since this project was opened. Choose an operation and run it: progress, the status of each
-      page and the log appear here, and keep running while you review pages in the workbench.
-    </p>
+      {t("No job has run since this project was opened. Choose an operation and run it: progress, the status of each page and the log appear here, and keep running while you review pages in the workbench.")}</p>
   );
 }
 
 function Options({ operation, jobs }: { operation: OperationKind; jobs: number }) {
   const jobsField = (
     <label class="property">
-      <span>Jobs</span>
+      <span>{t("Jobs")}</span>
       <input
         class="number mono"
         type="number"
@@ -264,13 +262,12 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
         <>
           <div class="property">
             <span>
-              Glossary <span class="mono dim">{glossary.value?.name ?? "project glossary.json"}</span>
+              {t("Glossary")}{" "}<span class="mono dim">{glossary.value?.name ?? "project glossary.json"}</span>
             </span>
             <span class="buttons">
               {glossary.value && (
                 <button type="button" class="link" onClick={() => (glossary.value = null)}>
-                  Clear
-                </button>
+                  {t("Clear")}</button>
               )}
               <button
                 type="button"
@@ -281,20 +278,18 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
                   })
                 }
               >
-                Import…
-              </button>
+                {t("Import…")}</button>
             </span>
           </div>
-          <p class="helper">A confirmed source-to-translation JSON map, saved as the project's glossary.json.</p>
+          <p class="helper">{t("A confirmed source-to-translation JSON map, saved as the project's glossary.json.")}</p>
           <div class="property">
             <span>
-              Context from <span class="mono dim">{context.value?.name ?? "none"}</span>
+              {t("Context from")}{" "}<span class="mono dim">{context.value?.name ?? t("None")}</span>
             </span>
             <span class="buttons">
               {context.value && (
                 <button type="button" class="link" onClick={() => (context.value = null)}>
-                  Clear
-                </button>
+                  {t("Clear")}</button>
               )}
               <button
                 type="button"
@@ -305,19 +300,17 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
                   })
                 }
               >
-                Choose…
-              </button>
+                {t("Choose…")}</button>
             </span>
           </div>
-          <p class="helper">The previous volume's project: carries terminology and story context over.</p>
+          <p class="helper">{t("The previous volume's project: carries terminology and story context over.")}</p>
           <label class="check">
             <input
               type="checkbox"
               checked={continueOnError.value}
               onChange={(event) => (continueOnError.value = (event.currentTarget as HTMLInputElement).checked)}
             />
-            Continue on error: mark failed pages and go on
-          </label>
+            {t("Continue on error: mark failed pages and go on")}</label>
           {jobsField}
         </>
       );
@@ -326,7 +319,7 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
         <>
           {jobsField}
           <label class="field">
-            <span>Skip pages</span>
+            <span>{t("Skip pages")}</span>
             <input
               class="text-input mono"
               type="text"
@@ -340,12 +333,12 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
       );
     case "check_terms":
     case "check_layout":
-      return <p class="helper">The report is saved in the project's reports folder.</p>;
+      return <p class="helper">{t("The report is saved in the project's reports folder.")}</p>;
     case "export":
       return (
         <>
           <fieldset class="choices">
-            <legend class="sr-only">Export format</legend>
+            <legend class="sr-only">{t("Export format")}</legend>
             {(
               [
                 ["cbz", "Rendered CBZ"],
@@ -360,7 +353,7 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
                   checked={exportFormat.value === value}
                   onChange={() => (exportFormat.value = value)}
                 />
-                {label}
+                {t(label)}
               </label>
             ))}
           </fieldset>
@@ -371,8 +364,7 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
                 checked={masks.value}
                 onChange={(event) => (masks.value = (event.currentTarget as HTMLInputElement).checked)}
               />
-              Also export masks (white pixels were erased)
-            </label>
+              {t("Also export masks (white pixels were erased)")}</label>
           ) : (
             <>
               <label class="check">
@@ -381,22 +373,20 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
                   checked={allowPartial.value}
                   onChange={(event) => (allowPartial.value = (event.currentTarget as HTMLInputElement).checked)}
                 />
-                Allow partial: keep the original where a region is unfinished
-              </label>
+                {t("Allow partial: keep the original where a region is unfinished")}</label>
               <label class="check">
                 <input
                   type="checkbox"
                   checked={exportReport.value}
                   onChange={(event) => (exportReport.value = (event.currentTarget as HTMLInputElement).checked)}
                 />
-                Save a report of retained regions in the project
-              </label>
+                {t("Save a report of retained regions in the project")}</label>
             </>
           )}
           <p class="helper">
             {tier === "direct"
-              ? "You choose where the export is written when it starts."
-              : "The export is assembled in this browser and downloaded when it is complete."}
+              ? t("You choose where the export is written when it starts.")
+              : t("The export is assembled in this browser and downloaded when it is complete.")}
           </p>
         </>
       );
@@ -417,13 +407,11 @@ function Reviews() {
     <section class="reviews" aria-labelledby="reviews-title">
       <div class="section-head">
         <h2 id="reviews-title">
-          Review items <span class="dim">{listed.reduce((sum, entry) => sum + entry.count, 0)}</span>
+          {t("Review items")}{" "}<span class="dim">{listed.reduce((sum, entry) => sum + entry.count, 0)}</span>
         </h2>
       </div>
       <p class="helper pad">
-        From {[sources.audit, sources.terms].filter(Boolean).join(" and ")}. Each item shows in the inspector next to its
-        region.
-      </p>
+        {t("From")}{" "}{[sources.audit, sources.terms].filter(Boolean).join(" and ")}{t(". Each item shows in the inspector next to its region.")}</p>
       {listed.length > 0 && (
         <ol class="review-pages">
           {listed.map((entry) => (
