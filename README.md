@@ -1,6 +1,39 @@
 # camel
 
-Rust 漫画翻译库与 CLI。图片处理在本地执行，翻译通过兼容 Chat Completions 的 API 完成。字体和模型独立于程序安装。
+Rust 漫画翻译工具，包含命令行和纯前端工作台。识别文字、定位气泡、擦除原文、翻译和排版共用一套 Rust 库；工作台通过 WebAssembly 在浏览器里运行，并允许人工校正 OCR、气泡、掩码和译文。
+
+图像处理在本地执行。翻译与审校调用你配置的 Chat Completions 服务；视觉模式会发送页面图片，纯文本模式只发送文字。字体、识别模型和 API 凭据分别配置。
+
+![Camel 工作台：页面预览、区域选择、译文与原文校对](assets/workbench.webp)
+
+工作台预览示例，漫画画面来自《Invincible》，版权归原权利人所有。仓库中的示例图用于展示编辑界面。
+
+## 开始使用
+
+准备 Rust（项目最低版本见 `Cargo.toml`）、[just](https://github.com/casey/just)、下文列出的识别模型及中文字体。
+
+```sh
+just install
+camel analyze comic.cbz -o book --models /path/to/models
+camel translate book --base-url https://example.com/v1 --model your-model
+camel check-layout book -o layout.json --font /path/to/comic.ttf
+camel export book -o translated.cbz --font /path/to/comic.ttf
+```
+
+通过 `CAMEL_API_KEY` 或下文的独立密钥文件提供凭据。`analyze` 创建项目，`translate` 支持断点续跑；在导出前，可用工作台或 `review` / `apply-review` 校对。每个命令的完整选项见 `camel <command> --help`。
+
+运行网页工作台还需 Node.js（测试使用 v26）、`wasm-bindgen-cli` 和 Binaryen 的 `wasm-opt`：
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version 0.2.129 --locked
+# 安装 Binaryen，使 wasm-opt 位于 PATH 中
+just web-dev
+```
+
+打开 http://localhost:5173 。`wasm-bindgen-cli` 的版本须与 `Cargo.toml` 中的 `wasm-bindgen` 一致。生产构建使用 `just web`，输出为 `web/dist/`，部署时须使用 HTTPS（本机 localhost 也可）。工作台适合桌面窗口；窄窗口可用 Pages 收起页列表。
+
+## 配置
 
 可将常用设置放在 `$XDG_CONFIG_HOME/camel/config.json`（默认 `~/.config/camel/config.json`），或通过 `--config` 指定。命令行参数及对应环境变量优先于配置文件；配置中的相对路径以配置文件所在目录为基准。
 
@@ -22,37 +55,32 @@ Rust 漫画翻译库与 CLI。图片处理在本地执行，翻译通过兼容 C
 
 `translation` 还可设置 `fallback_model` 和 `api_key_file`。API 密钥保存在独立文件中，默认读取同一配置目录下的 `api-key`；也可通过 `CAMEL_API_KEY` 提供。
 
-## 使用
-
-安装 Rust，准备下表中的模型和中文字体，然后运行：
-
-```sh
-just install
-camel analyze comic.cbr -o book --models models/
-camel translate book \
-  --base-url https://token-plan-cn.xiaomimimo.com/v1 \
-  --model mimo-v2.6-pro
-camel export book -o translated.cbz --font /path/to/comic.ttf
-```
-
 ## 网页工作台
 
 工作台是纯静态网页，核心库和识别模型编译为 WebAssembly 在浏览器的 Web Worker 中运行，不需要后台服务。`just web-dev` 构建后在 http://localhost:5173 打开；构建产物 `web/dist/` 也可放在任意静态托管上。CLI 和工作台使用同一套流水线代码，两边可以交替处理同一个项目。
 
 **新建项目**：选择原漫画（CBZ/ZIP、CBR/RAR 文件或图片目录）、空的项目目录、模型目录（`detector.onnx` 和 `recognizer.onnx`，首次选择后缓存在浏览器中）和 Worker 数（默认为 CPU 核数减一，最多 4 个），即可在浏览器中分析。分析中断后再次运行会跳过已完成的页面。浏览器中的识别结果与 CLI 不逐字节一致：两者的模型推理浮点运算不同，置信度和坐标会有细微差异，个别难读文字的识别结果也可能不同。因此两边不能互相续跑分析，会提示来源、模型或程序已变化。
 
-**设置**：服务地址、模型、备用模型、目标语言、纯文本模式、提示词模板与变量、服务商请求字段、并发数和缓存开关，可以导入或导出 CLI 的 `config.json`。API 密钥只保存在当前浏览器中，不写入项目。服务需要允许浏览器跨域请求；MiMo Token Plan 已经允许。
+**设置**：服务地址、模型、备用模型、目标语言、纯文本模式、提示词模板与变量、服务商请求字段、并发数和缓存开关，可以导入或导出 CLI 的 `config.json`。API 密钥只保存在当前浏览器中，不写入项目。服务需要允许浏览器跨域请求。服务地址接受 HTTPS，或用于本地服务的 localhost / loopback HTTP。
 
 **任务**：在页面中运行场景规划、翻译、审校、术语检查、排版检查和导出，参数与对应的 CLI 命令相同，并显示进度、预计剩余时间、逐页状态和日志，可以随时取消，下次运行时继续。审校和术语检查的报告保存在项目的 `reports/` 下，各条建议显示在对应页面的检查器中，可一键采用。导出可生成 CBZ、PNG 目录或擦字图（可附掩码）。长任务运行期间需保持页面打开。
+
+![工作台任务：逐页进度、报告和运行日志](assets/jobs.webp)
 
 **校对**：打开已有项目时选择项目目录、原漫画和中文字体。每页读取时按项目记录核对原图内容，选错漫画会直接提示。工作台可以：
 
 - 逐页查看原图、擦字和成品三种画面，叠加区域编号、擦除掩码、排版区、OCR 词框、未识别候选和字形；预览与 `camel export --allow-partial` 的结果一致，并列出保留原文的区域及原因。
 - 修改译文（`\n` 为手动换行）、校正 OCR 原文、设置字号，标记区域或整页保留原文。
-- 用画笔增减擦除掩码和排版区，改用纯色填充（可吸取页面颜色），框选新建区域、把未识别候选转为区域、删除误识别区域。
+- 用画笔增减擦除掩码和排版区，改用纯色填充（可吸取页面颜色），框选新建区域、把未识别候选转为区域、删除误识别区域，或用 Dismiss 忽略未识别候选；忽略后不再计入待办，可撤销。
 - 每页撤销/重做；改动原文、保留标记或区域增删时，同步更新翻译检查点、上下文和 `translation-plan.json`。
 
 Chromium 内核浏览器（Chrome、Edge 等）直接读写项目目录，并在几秒内显示 `camel translate` 等外部写入；两边改动同一页时，后写入的一方会发现冲突，工作台重新载入该页，`translate` 保留工作台的改动，该页留待下次补译。Firefox 和 Safari 以只读方式载入已有项目，改动保存在浏览器中，用“Download changes”下载只含改动文件的 zip，解压覆盖到项目目录；在这两种浏览器中新建的项目保存在浏览器存储中，可用“Download project”下载。
+
+![设置页面：翻译服务、提示词和运行选项](assets/settings.webp)
+
+页面保存会检查文件版本；写入失败时保留撤销/重做记录，外部改动会使该页的旧历史失效。WASM 异常会显示具体错误并终止受影响的 worker；下次操作重新创建 worker，页面引擎同时恢复已选择的漫画和字体。
+
+## 命令行与项目
 
 `analyze` 接受 CBR/RAR、CBZ/ZIP、PNG、JPEG 或图片目录，按文件名中的数字排序。默认两个页线程共享模型权重；`--jobs N` 控制同时处理的页数。项目保存源路径、页内容校验值、区域坐标、擦字掩码和译文，不复制原图。分析中断后可重新运行同一命令继续；`inspect book` 输出 JSON 概况，包括已完成、部分完成、待处理、没有待翻译区域、保留原图、存在问题及受内容过滤影响的页数。诊断信息写入 stderr，`--quiet` 关闭进度输出。
 
@@ -143,6 +171,14 @@ Preserve tone and meaning; keep uncertain names in their original form for revie
 
 中文横排使用安全排版区每一行的可用区间，参考原文 OCR 字高统一页内字号，并围绕气泡主体平衡上下、左右留白。整段共用排版中轴，尾巴和与格间留白连通的开口分别参与空间约束；断行兼顾行宽、标点、孤字和字形外伸，同时保留语气停顿。中文使用 Jieba 分词辅助选择断行位置，并在本地优先保持已确认译名完整；空间不足时仍可在词内换行。内置词典来自 jieba-rs 0.11，许可证位于 `crates/camel/src/data/`。整页排版成功后执行擦字与绘制。字体可通过 `--font` 指定，默认优先寻找霞鹜文楷 Medium，再寻找本机中文字体。文楷可放在 `$XDG_DATA_HOME/camel/fonts/`（默认 `~/.local/share/camel/fonts/`）；字体独立于二进制加载。
 
+## 项目记录
+
+项目目录中的 `index.json` 列出页记录，`source.json` 引用原漫画；`NNNNN.json` 保存区域、掩码、译文、分析证据和翻译检查点。原图与模型不复制进项目。`translation-plan.json` 保存场景分组，`glossary.json` 保存确认术语，`reports/` 存放工作台报告。
+
+页记录的 `issues` 是带 `kind` 的对象数组，区分 `unresolved_text`、`translation_failed`、`content_filter`、`content_filter_context`、`confirmed_term_conflict`、`scene_term_conflicts` 和人工 `note`。CLI 的 `inspect` 输出这些结构；工作台和导出报告仍显示可读文字。页面 `context` 只保存词表、候选术语和场景摘要，前文对白由页记录重建。
+
+项目仍处于开发阶段，记录格式可直接调整。旧的字符串 `issues` 需要在外部一次性转换后使用，程序不内置旧格式兼容读取。
+
 ## 库
 
 工作区的 crate 都在 `crates/` 下：
@@ -172,7 +208,16 @@ just dist
 just web
 ```
 
-`just web` 依次构建 WebAssembly（需要 `wasm32-unknown-unknown` 目标、与 `crates/camel-web` 中版本一致的 `wasm-bindgen` CLI 和 `wasm-opt`）、前端和前端测试。
+`just check` 包含格式检查、原生和 wasm32 的 Clippy、Rust 测试及文档检查；`just web` 构建 WebAssembly、前端和前端测试，测试文件也参与 TypeScript 类型检查。
+
+需要字体或识别模型的集成测试默认跳过，可按测试注释提供 `CAMEL_TEST_FONT`、`CAMEL_TEST_MODELS` 等输入后运行。例如：
+
+```sh
+CAMEL_TEST_FONT=/path/to/comic.ttf \
+  cargo test -p camel-cli --test workflow --test review -- --ignored
+```
+
+开发工具链验证于 Rust 1.98.1、Node.js 26.13.1、wasm-bindgen 0.2.129 和 wasm-opt 133。
 
 全量识别和擦字评测直接读取本地图片，复用已加载的模型，擦字图在内存中校验：
 
