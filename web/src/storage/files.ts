@@ -202,13 +202,17 @@ export async function chooseComicArchive(): Promise<ComicChoice | null> {
       (await picked(() =>
         window.showOpenFilePicker!({
           id: "camel-comic",
-          types: [{ description: "Comic archive", accept: { "application/octet-stream": [".cbz", ".zip", ".cbr", ".rar"] } }],
+          types: [{ description: "Comic archive", accept: { "application/octet-stream": [".cbz", ".zip", ".cbr", ".rar", ".png", ".jpg", ".jpeg"] } }],
         }),
       )) ?? [];
-    return handle ? { comic: { kind: "archive", file: await handle.getFile() }, handle: { kind: "archive", handle } } : null;
+    if (!handle) return null;
+    const file = await handle.getFile();
+    return IMAGE.test(file.name)
+      ? { comic: { kind: "images", name: file.name, files: [file] }, handle: null }
+      : { comic: { kind: "archive", file }, handle: { kind: "archive", handle } };
   }
-  const [file] = await chooseFiles({ accept: ".cbz,.zip,.cbr,.rar" });
-  return file ? { comic: { kind: "archive", file }, handle: null } : null;
+  const [file] = await chooseFiles({ accept: ".cbz,.zip,.cbr,.rar,.png,.jpg,.jpeg" });
+  return file ? { comic: IMAGE.test(file.name) ? { kind: "images", name: file.name, files: [file] } : { kind: "archive", file }, handle: null } : null;
 }
 
 export async function chooseComicFolder(): Promise<ComicChoice | null> {
@@ -280,6 +284,7 @@ export interface BrowserProject {
   readonly name: string;
   readonly handle: FileSystemDirectoryHandle;
   readonly state: FolderState;
+  readonly reader: boolean;
 }
 
 /** Projects kept in this browser's private storage (snapshot tier). */
@@ -290,7 +295,9 @@ export async function browserProjects(): Promise<BrowserProject[]> {
   for await (const entry of root.values()) {
     if (entry.kind !== "directory") continue;
     const handle = entry as FileSystemDirectoryHandle;
-    projects.push({ name: entry.name, handle, state: await folderState(handle) });
+    const names: string[] = [];
+    for await (const name of handle.keys()) names.push(name);
+    projects.push({ name: entry.name, handle, state: classifyFolder(names), reader: names.includes("reader.json") });
   }
   return projects.sort((a, b) => a.name.localeCompare(b.name));
 }

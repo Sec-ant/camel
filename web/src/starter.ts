@@ -25,16 +25,22 @@ export async function installStarterProject(): Promise<FileSystemDirectoryHandle
     Promise.all(imageNames.map((name) => asset(`./sample/images/${name}`))),
     asset("./sample/project/index.json"),
   ]);
-  const directory = await browserProject("Coffee for You");
-  const store = new DirectoryStore(directory);
-  for (const [i, path] of projectPaths.entries()) {
-    await store.write(path, new Uint8Array(records[i]!), { kind: "create_new" });
-  }
-  for (const [i, name] of imageNames.entries()) {
-    await store.write(`images/${name}`, new Uint8Array(images[i]!), { kind: "create_new" });
-  }
-  await saveFont(font);
-  await store.write("index.json", new Uint8Array(index), { kind: "create_new" });
-  localStorage.setItem("camel.projects.initialized", "1");
-  return directory;
+  return navigator.locks.request("camel:create-browser-project", async () => {
+    if ((await browserProjects()).length || (await recentProjects()).length) {
+      localStorage.setItem("camel.projects.initialized", "1");
+      return null;
+    }
+    const directory = await browserProject("Coffee for You");
+    const store = new DirectoryStore(directory);
+    for (const [i, path] of projectPaths.entries()) {
+      await store.write(path, new Uint8Array(records[i]!), { kind: "create_new" });
+    }
+    for (const [i, name] of imageNames.entries()) {
+      await store.write(`images/${name}`, new Uint8Array(images[i]!), { kind: "create_new" });
+    }
+    if (!(await rememberedFont())) await saveFont(font);
+    await store.write("index.json", new Uint8Array(index), { kind: "create_new" });
+    localStorage.setItem("camel.projects.initialized", "1");
+    return directory;
+  });
 }

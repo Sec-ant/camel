@@ -2,9 +2,10 @@
 // a new one (see NewProject.tsx).
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { call, openComic } from "./engine.ts";
 import { NewProject } from "./NewProject.tsx";
+import { openReader, reader, storedComic } from "./reader.ts";
 import { installStarterProject } from "./starter.ts";
 import { recordReference } from "./protocol.ts";
 import { Session, readIndex } from "./session.ts";
@@ -68,30 +69,49 @@ export function comicName(choice: ComicChoice): string {
 
 export function OpenScreen() {
   const mode = openMode.value;
-  const [initializing, setInitializing] = useState(!localStorage.getItem("camel.projects.initialized"));
+  const interacted = useRef(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const chooseComic = async (folder: boolean): Promise<void> => {
+    interacted.current = true;
+    setQuickError(null);
+    try {
+      const choice = await (folder ? chooseComicFolder() : chooseComicArchive());
+      if (choice) await openReader(choice.comic);
+    } catch (error) { setQuickError(errorMessage(error)); }
+  };
   return (
     <main class="open-screen">
-      {initializing && <p class="helper">Opening project…</p>}
-      <div class="buttons joined mode-switch" role="group" aria-label="Project" hidden={initializing}>
-        <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => (openMode.value = "open")}>
+      <div class="buttons joined mode-switch" role="group" aria-label="Project">
+        <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => { interacted.current = true; openMode.value = "open"; }}>
           Open project
         </button>
-        <button type="button" class="button" aria-pressed={mode === "new"} onClick={() => (openMode.value = "new")}>
+        <button type="button" class="button" aria-pressed={mode === "new"} onClick={() => { interacted.current = true; openMode.value = "new"; }}>
           New project
         </button>
       </div>
       {/* Both stay mounted so choices (and a running analysis view) survive switching. */}
-      <div class="open-mode" hidden={initializing || mode !== "open"}>
-        <OpenProject onInitialized={() => setInitializing(false)} />
+      <div class="open-mode" hidden={mode !== "open"}>
+        <OpenProject mayOpenStarter={() => !interacted.current} />
       </div>
-      <div class="open-mode" hidden={initializing || mode !== "new"}>
-        <NewProject />
+      <div class="open-mode" hidden={mode !== "new"}>
+        {advanced ? <><button class="link" type="button" onClick={() => setAdvanced(false)}>Back to open comic</button><NewProject /></> : (
+          <section class="open-panel" aria-labelledby="comic-title">
+            <div class="section-head"><h2 id="comic-title">Open a comic</h2></div>
+            <p class="helper pad">Choose a CBZ/ZIP, CBR/RAR, PNG, JPEG, or image folder. Read it now and analyze it when you are ready to edit.</p>
+            <div class="open-actions"><div class="buttons">
+              <button class="button inverse" type="button" onClick={() => void chooseComic(false)}>Choose file…</button>
+              <button class="button" type="button" onClick={() => void chooseComic(true)}>Image folder…</button>
+            </div><button class="link" type="button" onClick={() => { interacted.current = true; setAdvanced(true); }}>Advanced…</button></div>
+            {quickError && <p class="alert pad">{quickError}</p>}
+          </section>
+        )}
       </div>
     </main>
   );
 }
 
-function OpenProject({ onInitialized }: { readonly onInitialized: () => void }) {
+function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolean }) {
   const [projectState, setProject] = useState<ProjectState | null>(null);
   const [projectCheck, setProjectCheck] = useState<Check>({ state: "idle" });
   const [comic, setComic] = useState<ComicState | null>(null);
@@ -104,9 +124,9 @@ function OpenProject({ onInitialized }: { readonly onInitialized: () => void }) 
 
   useEffect(() => {
     void installStarterProject().then(async (handle) => {
-      if (handle) await openStored(handle);
+      if (handle && !reader.value && mayOpenStarter()) await openStored(handle);
       else setStored(await browserProjects());
-    }).catch((error: unknown) => setOpenError(errorMessage(error))).finally(onInitialized);
+    }).catch((error: unknown) => setOpenError(errorMessage(error)));
   }, []);
 
   useEffect(() => {
@@ -206,6 +226,20 @@ function OpenProject({ onInitialized }: { readonly onInitialized: () => void }) 
   // Projects can include their original images in an images/ folder.
   const openStored = async (handle: FileSystemDirectoryHandle): Promise<void> => {
     const projectFiles = new ProjectFiles(new DirectoryStore(handle));
+    const manifest = await projectFiles.read("reader.json");
+    if (manifest) {
+      const comicFiles = await storedComic(handle);
+      if (!(await projectFiles.read("index.json"))) {
+        await openReader(comicFiles, handle);
+        return;
+      }
+      const selectedFont = await rememberedFont();
+      if (!selectedFont) { await loadProject({ files: projectFiles, handle: null }); return; }
+      const comic = await openComic(comicFiles);
+      const opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined });
+      await start(opened);
+      return;
+    }
     let imageDirectory: FileSystemDirectoryHandle;
     try {
       imageDirectory = await handle.getDirectoryHandle("images");
@@ -356,8 +390,8 @@ function OpenProject({ onInitialized }: { readonly onInitialized: () => void }) 
             {stored.map((entry) => (
               <li key={entry.name} class="recent">
                 <span>{entry.name}</span>
-                <span class="mono dim">{entry.state === "project" ? "READY" : "ANALYSIS UNFINISHED"}</span>
-                {entry.state === "project" ? (
+                <span class="mono dim">{entry.state === "project" ? "READY" : entry.reader ? "COMIC" : "ANALYSIS UNFINISHED"}</span>
+                {entry.state === "project" || entry.reader ? (
                   <button
                     type="button"
                     class="button small"

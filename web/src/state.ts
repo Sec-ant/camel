@@ -74,7 +74,7 @@ export function activeSession(): Session | null {
 export type View = "main" | "jobs" | "settings";
 export const view = signal<View>("main");
 /** Open screen mode before a project is open. */
-export const openMode = signal<"open" | "new">("open");
+export const openMode = signal<"open" | "new">("new");
 
 /** Review items of the latest audit and check-terms reports, by record file name. */
 export const reviewItems = signal<ReadonlyMap<string, readonly ReviewItem[]>>(new Map());

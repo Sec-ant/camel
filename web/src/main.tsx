@@ -6,6 +6,8 @@ import { Inspector } from "./Inspector.tsx";
 import { JobsScreen } from "./Jobs.tsx";
 import { installKeys } from "./keys.ts";
 import { OpenScreen } from "./OpenScreen.tsx";
+import { ReaderScreen } from "./Reader.tsx";
+import { reader } from "./reader.ts";
 import { PageList } from "./PageList.tsx";
 import { SettingsScreen } from "./Settings.tsx";
 import { project, railOpen, view } from "./state.ts";
@@ -31,7 +33,7 @@ function App() {
           <JobsScreen />
         </div>
       )}
-      {!project.value ? (
+      {reader.value ? <ReaderScreen /> : !project.value ? (
         <div class="app" data-screen="open" hidden={screen !== "main"}>
           <TitleBar />
           <OpenScreen />

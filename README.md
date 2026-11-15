@@ -16,17 +16,18 @@ The sample shows *Invincible* translated into Simplified Chinese. Artwork belong
 ## Get started
 
 1. Open the [workbench](https://sec-ant.github.io/camel/) in a desktop browser. A two-page example project opens on your first visit.
-2. Choose a font that covers your target language.
-3. Choose **New project**, select your comic and font, and download the default models or choose your own model folder.
-4. Open **Settings** and enter your API URL, model, API key, and target language. The API must allow cross-origin browser requests.
-5. Use **Jobs** to translate and export, and **Workbench** to review the result.
+2. Choose **Open another project**, then select a comic archive, image, or image folder. The comic opens immediately and is saved in browser storage.
+3. Choose **Analyze and edit** to detect text and enter the workbench. Camel downloads the default models and font when needed; you can choose your own in advanced setup.
+4. In **Settings**, enter your API URL, model, API key, and target language. The API must allow cross-origin browser requests. Use **Jobs** to translate and export.
+
+CBZ/ZIP, CBR/RAR, PNG and JPEG are supported; PDF is not currently supported. Browser projects can be downloaded as ZIP files. The default recognition models are:
 
 | File | Model |
 | --- | --- |
 | `detector.onnx` | [comic-text-and-bubble-detector, detector-v4-s_int8](https://huggingface.co/ogkalu/comic-text-and-bubble-detector) |
 | `recognizer.onnx` | [RapidOCR, en_PP-OCRv5_rec_mobile](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml), including its embedded character dictionary |
 
-Chromium browsers can save directly to a project folder. Firefox and Safari use browser storage: select **Download changes** and unpack the ZIP over the project folder to save edits. Keep the tab open while jobs run.
+New comics are kept in browser storage. Existing project folders can be opened directly in Chromium; Firefox and Safari use a snapshot and provide **Download changes** to save edits. Keep the tab open while jobs run.
 
 ## CLI
 
