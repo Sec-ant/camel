@@ -1737,13 +1737,46 @@ textarea.prompt {
 }
 @media (max-width: 700px) { .reader-toolbar { flex-wrap: wrap; } .reader-toolbar .buttons { margin-left: 0; } }
 
+.language-picker {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+}
+
+.language-picker::after {
+  position: absolute;
+  top: 40%;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  content: "";
+  pointer-events: none;
+  transform: rotate(45deg);
+}
+
 .language-select {
   max-width: 10rem;
-  padding: 3px 6px;
-  border: 1px solid currentColor;
+  padding: 2px 18px 2px 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.language-select:focus-visible {
+  outline-color: var(--paper);
+}
+
+.language-select option {
   background: var(--paper);
   color: var(--ink);
-  font: inherit;
 }
 
 @media (max-width: 1279px) {
