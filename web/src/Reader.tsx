@@ -45,7 +45,7 @@ export function ReaderScreen() {
       const type = signature[0] === 0x89 && signature[1] === 0x50 ? "image/png" : "image/jpeg";
       url = URL.createObjectURL(new Blob([bytes], { type }));
       setImage(url);
-    }).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)));
+    }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => { active = false; if (url) URL.revokeObjectURL(url); };
   }, [current.id, page]);
   const analyze = async (): Promise<void> => {

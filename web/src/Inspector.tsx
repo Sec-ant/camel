@@ -10,6 +10,7 @@ import { hexRgb, rgbHex, sampleBackground } from "./color.ts";
 import { spanArea } from "./spans.ts";
 import {
   announce,
+  applySuggestion,
   doc,
   draft,
   effectiveMask,
@@ -21,6 +22,7 @@ import {
   selectRegion,
   selectedRegion,
   selection,
+  setDraft,
   stepRegion,
   submit,
   tool,
@@ -173,6 +175,7 @@ function CommitText(props: CommitTextProps) {
 
   // Text already sent and awaiting the server, so blur + flush do not submit it twice.
   const sent = useRef<string | null>(null);
+  const pending = useRef<{ text: string; task: Promise<boolean> } | null>(null);
 
   // Adopt server changes unless the user has typed something not yet sent; this also picks
   // up the server's normalized form of what we just committed. A new server value settles
@@ -185,17 +188,22 @@ function CommitText(props: CommitTextProps) {
     setText((current) => (current === previous || current === awaited ? value : current));
   }, [value]);
 
-  const commit = useRef<() => Promise<void>>(async () => {});
+  const commit = useRef<() => Promise<boolean>>(async () => true);
   commit.current = async () => {
-    if (!dirty || sent.current === text) return;
+    if (pending.current?.text === text) return pending.current.task;
+    if (sent.current === text && pending.current === null) return true;
+    if (!dirty) return true;
     if (props.required && text.trim() === "") {
       announce(props.required, "error");
-      setText(value);
-      return;
+      return false;
     }
     sent.current = text;
-    const result = await props.onCommit(text);
-    if (result === null) sent.current = null;
+    const task = Promise.resolve(props.onCommit(text)).then((result) => {
+      if (result === null) sent.current = null;
+      return result !== null;
+    });
+    pending.current = { text, task };
+    try { return await task; } finally { if (pending.current?.task === task) pending.current = null; }
   };
 
   useEffect(() => {
@@ -236,8 +244,8 @@ function CommitText(props: CommitTextProps) {
           ref.current?.blur();
         } else if (event.key === "Tab" && props.onTab && !event.altKey && !event.metaKey && !event.ctrlKey) {
           event.preventDefault();
-          void commit.current();
-          props.onTab(event.shiftKey ? -1 : 1);
+          const direction = event.shiftKey ? -1 : 1;
+          void commit.current().then((saved) => { if (saved) props.onTab?.(direction); });
         }
       }}
     />
@@ -280,8 +288,9 @@ function RegionDetail({ region, order }: { region: Region; order: number }) {
             describedBy={`${prefix}-translation-hint`}
             onCommit={(text) => submit([{ op: "set_translation", region: region.id, text }])}
             onTab={(direction) => {
-              stepRegion(direction);
-              focusRequest.value = { field: "translation", region: selection.value };
+              void stepRegion(direction).then((changed) => {
+                if (changed) focusRequest.value = { field: "translation", region: selection.value };
+              });
             }}
           />
           <p id={`${prefix}-translation-hint`} class="helper">
@@ -523,8 +532,9 @@ function RemoveRegion({ region }: { region: Region }) {
 
 function DraftPanel() {
   const pending = draft.value!;
-  const [source, setSource] = useState("");
-  const [translation, setTranslation] = useState("");
+  const { source, translation } = pending;
+  const creating = useRef(false);
+  const [busy, setBusy] = useState(false);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -535,11 +545,14 @@ function DraftPanel() {
   }, [focusRequest.value]);
 
   const create = async (): Promise<void> => {
+    if (creating.current) return;
     if (source.trim() === "") {
       announce("Enter the source text first", "error");
       sourceRef.current?.focus();
       return;
     }
+    creating.current = true;
+    setBusy(true);
     const result = await submit([
       {
         op: "add_region",
@@ -548,20 +561,23 @@ function DraftPanel() {
         translation: translation.trim() === "" ? null : translation,
       },
     ]);
+    creating.current = false;
+    setBusy(false);
     const created = result?.created[0];
     if (created !== undefined) {
-      draft.value = null;
+      setDraft(null);
       selectRegion(created);
     }
   };
   const keys = (event: KeyboardEvent): void => {
     if (event.isComposing || event.keyCode === 229) return;
+    if (creating.current) return;
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void create();
     } else if (event.key === "Escape") {
       event.preventDefault();
-      draft.value = null;
+      setDraft(null);
     }
   };
   const { x, y, width, height } = pending.bounds;
@@ -570,7 +586,7 @@ function DraftPanel() {
     <section class="panel" aria-labelledby="draft-title">
       <div class="panel-head">
         <h3 id="draft-title">{t("New region")}</h3>
-        <button type="button" class="link" onClick={() => (draft.value = null)}>
+        <button type="button" class="link" disabled={busy} onClick={() => setDraft(null)}>
           {t("Cancel")}</button>
       </div>
       <p class="helper mono">
@@ -584,8 +600,9 @@ function DraftPanel() {
           id="draft-source"
           class="source"
           rows={2}
+          disabled={busy}
           value={source}
-          onInput={(event) => setSource((event.currentTarget as HTMLTextAreaElement).value)}
+          onInput={(event) => setDraft({ ...pending, source: (event.currentTarget as HTMLTextAreaElement).value })}
           onKeyDown={keys}
         />
       </div>
@@ -597,15 +614,16 @@ function DraftPanel() {
           class="translation"
           lang=""
           rows={3}
+          disabled={busy}
           value={translation}
-          onInput={(event) => setTranslation((event.currentTarget as HTMLTextAreaElement).value)}
+          onInput={(event) => setDraft({ ...pending, translation: (event.currentTarget as HTMLTextAreaElement).value })}
           onKeyDown={keys}
         />
       </div>
       <p class="helper">
         {t("Bubble shape, erase mask and fill are derived from the page; fix them with the brushes afterwards. ⌘↵ creates, Esc cancels.")}</p>
       <div class="buttons">
-        <button type="button" class="button inverse" onClick={() => void create()}>
+        <button type="button" class="button inverse" disabled={busy} onClick={() => void create()}>
           {t("Create region")}</button>
       </div>
     </section>
@@ -630,8 +648,9 @@ function RegionReview({ region }: { region: Region }) {
       </legend>
       <ol class="review-items">
         {items.map((item, at) => {
-          const applied = item.suggestion !== null && region.translation === item.suggestion;
-          const changed = !applied && item.translation !== null && region.translation !== item.translation;
+          const sourceChanged = item.source === null || region.source !== item.source;
+          const applied = !sourceChanged && item.suggestion !== null && region.translation === item.suggestion;
+          const changed = sourceChanged || (!applied && region.translation !== item.translation);
           return (
             <li key={at} class="review-item">
               <span class="mono review-label">{item.label}</span>
@@ -642,7 +661,9 @@ function RegionReview({ region }: { region: Region }) {
                   {item.suggestion}
                 </p>
               )}
-              {changed && <p class="helper">{t("The translation has changed since this report.")}</p>}
+              {changed && <p class="helper">{t("This report no longer matches the current source or translation.")}</p>}
+              {sourceChanged && <p class="helper">{t("Reviewed source:")}{" "}{item.source ?? "—"}<br />{t("Current source:")}{" "}{region.source}</p>}
+              {changed && <p class="helper">{t("Reviewed translation:")}{" "}{item.translation ?? "—"}<br />{t("Current translation:")}{" "}{region.translation ?? "—"}</p>}
               <div class="buttons">
                 {applied ? (
                   <span class="mono dim">APPLIED</span>
@@ -650,7 +671,8 @@ function RegionReview({ region }: { region: Region }) {
                   <button
                     type="button"
                     class="button small"
-                    onClick={() => void submit([{ op: "set_translation", region: region.id, text: item.suggestion }])}
+                    disabled={changed}
+                    onClick={() => void applySuggestion(region.id, item.source!, item.translation, item.suggestion!)}
                   >
                     {t("Apply suggestion")}</button>
                 ) : (

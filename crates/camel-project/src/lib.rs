@@ -26,6 +26,7 @@ mod record;
 mod remote;
 pub mod render;
 pub mod source;
+pub mod status;
 mod store;
 pub mod terms;
 pub mod translate;

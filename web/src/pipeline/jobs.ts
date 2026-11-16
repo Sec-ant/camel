@@ -6,7 +6,7 @@
 import { signal } from "@preact/signals";
 import { call } from "../engine.ts";
 import { WorkerClient } from "../rpc.ts";
-import { activeSession, syncProject } from "../state.ts";
+import { activeSession, flushForSnapshot, syncProject } from "../state.ts";
 import { type ComicFiles, type ModelFiles, discardExport, downloadExport } from "../storage/files.ts";
 import type { ProjectStore } from "../storage/store.ts";
 import { type LogLine, Progress, describeEvent } from "./progress.ts";
@@ -20,7 +20,7 @@ import type {
 } from "./protocol.ts";
 
 export type JobKind = OperationKind | "analyze";
-export type JobStatus = "running" | "cancelling" | "done" | "failed" | "cancelled";
+export type JobStatus = "running" | "cancelling" | "finalizing" | "done" | "failed" | "cancelled";
 
 const LOG_LIMIT = 2000;
 const REFRESH_INTERVAL = 3000;
@@ -60,7 +60,7 @@ function message(error: unknown): string {
 
 export function jobRunning(): boolean {
   const status = currentJob.value?.status;
-  return status === "running" || status === "cancelling";
+  return status === "running" || status === "cancelling" || status === "finalizing";
 }
 
 function startJob(kind: JobKind, title: string, pages: readonly string[], records: readonly string[], workers: number): Job {
@@ -97,17 +97,16 @@ function record(job: Job, event: PipelineEvent): void {
 }
 
 function settle(job: Job, outcome: { result: OperationResult } | { error: unknown }): void {
-  const cancelling = job.status === "cancelling";
   const now = Date.now();
   if ("result" in outcome) {
     job.result = outcome.result;
-    job.status = cancelling ? "cancelled" : "done";
+    job.status = "done";
     job.progress.settle(true, now);
     // Term checks and scene planning report no per-page events.
-    if (!cancelling && (job.kind === "check_terms" || job.kind === "prepare")) job.progress.finishAll(now);
+    if (job.kind === "check_terms" || job.kind === "prepare") job.progress.finishAll(now);
   } else {
     job.error = message(outcome.error);
-    job.status = cancelling ? "cancelled" : "failed";
+    job.status = outcome.error instanceof Error && outcome.error.name === "CamelCancelled" ? "cancelled" : "failed";
     job.progress.settle(false, now);
     log(job, { time: now, tone: "error", page: null, text: job.error });
   }
@@ -129,9 +128,18 @@ function pipelineWorker(): WorkerClient<PipelineRequests, PipelineEvent> {
 export async function runOperation(spec: JobSpec, title: string): Promise<void> {
   const session = activeSession();
   if (!session) return;
+  if (!(await flushForSnapshot())) {
+    if (spec.kind === "export" && spec.target.download) await discardExport(spec.target);
+    return;
+  }
+  if (activeSession() !== session) {
+    if (spec.kind === "export" && spec.target.download) await discardExport(spec.target);
+    return;
+  }
   const job = startJob(spec.kind, title, session.index, session.index, 1);
   const font = session.font.bytes.slice(0);
   let refreshed = 0;
+  let outcome: { result: OperationResult } | { error: unknown };
   try {
     const result = await pipelineWorker().call(
       "run",
@@ -147,9 +155,13 @@ export async function runOperation(spec: JobSpec, title: string): Promise<void> 
       },
     );
     if (spec.kind === "export" && spec.target.download) await downloadExport(spec.target);
-    settle(job, { result });
+    outcome = { result };
   } catch (error) {
-    settle(job, { error });
+    outcome = { error };
+  }
+  job.status = "finalizing";
+  jobVersion.value++;
+  if ("error" in outcome) {
     if (spec.kind === "export" && spec.target.download) {
       await discardExport(spec.target).catch((cleanup: unknown) => {
         log(job, { time: Date.now(), tone: "warning", page: null, text: `The partial export was not removed: ${message(cleanup)}` });
@@ -157,7 +169,12 @@ export async function runOperation(spec: JobSpec, title: string): Promise<void> 
       });
     }
   }
-  await syncProject();
+  try {
+    await syncProject();
+  } catch (error) {
+    log(job, { time: Date.now(), tone: "warning", page: null, text: `Could not refresh the project: ${message(error)}` });
+  }
+  settle(job, outcome);
 }
 
 export interface AnalysisInput {
@@ -202,6 +219,7 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
     stopped = true;
   };
   const onEvent = (event: PipelineEvent): void => record(job, event);
+  let outcome: { result: OperationResult } | { error: unknown };
   try {
     const { store, models } = input;
     const [detector_sha256, recognizer_sha256] = await Promise.all([sha256(models.detector), sha256(models.recognizer)]);
@@ -218,6 +236,7 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
     );
     completed.forEach((done, index) => done && job.progress.skip(index));
     const queue = records.map((_, index) => index).filter((index) => !completed[index]);
+    let remaining = queue.length;
     for (let at = 0; at < Math.min(workers, queue.length); at++) {
       clients.push(new WorkerClient(new URL("./analyzer-worker.js", import.meta.url), "analyzer"));
     }
@@ -248,6 +267,7 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
             next = take();
             await client.call("page", { number: index + 1, total, bytes: buffer }, [buffer], onEvent);
             job.progress.complete(index, Date.now());
+            remaining--;
           } catch (error) {
             failure ??= error;
             job.progress.fail(index, `${input.comicPages[index]}: ${message(error)}`);
@@ -257,14 +277,21 @@ export async function runAnalysis(input: AnalysisInput): Promise<Job> {
       }),
     );
     if (failure !== null) throw failure;
-    if (stopped) throw new Error("Analysis cancelled; run it again on the same folder to continue");
-    settle(job, { result: await pipelineWorker().call("finishAnalysis", { store: store.descriptor, pages: total }, [], onEvent) });
+    if (stopped && remaining > 0) {
+      const error = new Error("Analysis cancelled; run it again on the same folder to continue");
+      error.name = "CamelCancelled";
+      throw error;
+    }
+    outcome = { result: await pipelineWorker().call("finishAnalysis", { store: store.descriptor, pages: total }, [], onEvent) };
   } catch (error) {
-    settle(job, { error });
+    outcome = { error };
   } finally {
+    job.status = "finalizing";
+    jobVersion.value++;
     stopAnalysis = null;
     for (const client of clients) client.terminate();
   }
+  settle(job, outcome);
   return job;
 }
 
@@ -275,7 +302,10 @@ export function cancelJob(): void {
   job.status = "cancelling";
   jobVersion.value++;
   if (job.kind === "analyze") stopAnalysis?.();
-  else void pipeline?.call("cancel", null);
+  else void pipeline?.call("cancel", null).catch((error: unknown) => {
+    log(job, { time: Date.now(), tone: "error", page: null, text: `Could not request cancellation: ${message(error)}` });
+    touch();
+  });
 }
 
 /** Default analyzer pool size: leave one core to the page, at most four engines. */

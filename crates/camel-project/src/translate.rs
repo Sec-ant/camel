@@ -21,7 +21,7 @@ use sha2::Digest as _;
 use crate::{
     Issue, Record, TranslationConfig,
     error::{Error, chain, fail},
-    host::{Event, Host, HostError, PageSource, PageTask, Projects, WriteMode},
+    host::{Event, Host, HostError, PageOutcome, PageSource, PageTask, Projects, WriteMode},
     record::PageContext,
     remote::{Client, Remote, Service},
     sha256_hex,
@@ -385,7 +385,7 @@ pub async fn translate<H: Host, P: Projects>(
         last_filtered,
         inherited_summary_invalidated,
     };
-    let result = if options.jobs > 1
+    if options.jobs > 1
         && (last_filtered.is_none() || exists(host, crate::prepare::PLAN_FILE).await?)
     {
         scenes::parallel(&run, context).await
@@ -401,11 +401,7 @@ pub async fn translate<H: Host, P: Projects>(
                 }
                 Ok(())
             })
-    };
-    if host.cancelled() {
-        return Err(Error::Cancelled);
     }
-    result
 }
 
 fn remember_page_safe(
@@ -541,6 +537,9 @@ async fn translate_range<H: Host, S: PageSource>(
     }
     for i in range {
         if halted() {
+            if host.cancelled() && failed_pages == 0 && filtered_pages == 0 {
+                return Err(Error::Cancelled);
+            }
             break;
         }
         let name = &index[i];
@@ -562,9 +561,21 @@ async fn translate_range<H: Host, S: PageSource>(
             clean_start = i + 1;
             context = isolated_context(&context);
             candidate_origins.clear();
+            host.report(Event::PageFinished {
+                page: name.clone(),
+                outcome: if record.has_missing_translation() {
+                    PageOutcome::Failed
+                } else {
+                    PageOutcome::Skipped
+                },
+            });
             continue;
         }
         if record.preserve_original {
+            host.report(Event::PageFinished {
+                page: name.clone(),
+                outcome: PageOutcome::Skipped,
+            });
             continue;
         }
         let source: Vec<_> = record
@@ -644,6 +655,10 @@ async fn translate_range<H: Host, S: PageSource>(
         }
         if missing.is_empty() {
             if isolate && !parallel {
+                host.report(Event::PageFinished {
+                    page: name.clone(),
+                    outcome: PageOutcome::Skipped,
+                });
                 continue;
             }
             remember_page_safe(
@@ -653,6 +668,10 @@ async fn translate_range<H: Host, S: PageSource>(
                 stale_summary,
             );
             if record.context.is_some() || !record.page.regions.is_empty() {
+                host.report(Event::PageFinished {
+                    page: name.clone(),
+                    outcome: PageOutcome::Skipped,
+                });
                 continue;
             }
         } else {
@@ -932,6 +951,10 @@ async fn translate_range<H: Host, S: PageSource>(
                     restore_preserved(&mut record.page, preserved);
                     restore_preserved_geometry(&mut record.analysis, preserved_geometry);
                     save_unless_changed(host, name, &record, &revision, FILL_LATER).await?;
+                    host.report(Event::PageFinished {
+                        page: name.clone(),
+                        outcome: PageOutcome::Failed,
+                    });
                     let affected_count = mark_filter_context(host, index, &affected).await?;
                     host.report(Event::Warning {
                         page: Some(name.clone()),
@@ -981,6 +1004,10 @@ async fn translate_range<H: Host, S: PageSource>(
                     restore_preserved(&mut record.page, preserved);
                     restore_preserved_geometry(&mut record.analysis, preserved_geometry);
                     save_unless_changed(host, name, &record, &revision, FILL_LATER).await?;
+                    host.report(Event::PageFinished {
+                        page: name.clone(),
+                        outcome: PageOutcome::Failed,
+                    });
                     failed_pages += 1;
                     if consecutive_service_failures >= 3 {
                         return fail(
@@ -1004,9 +1031,20 @@ async fn translate_range<H: Host, S: PageSource>(
         if fresh_summary {
             record.summary_invalidated = false;
         }
-        if !save_unless_changed(host, name, &record, &revision, FILL_LATER).await? {
+        let saved = save_unless_changed(host, name, &record, &revision, FILL_LATER).await?;
+        if saved {
+            host.report(Event::PageFinished {
+                page: name.clone(),
+                outcome: PageOutcome::Done,
+            });
+        } else {
             failed_pages += 1;
-        } else if fresh_summary {
+            host.report(Event::PageFinished {
+                page: name.clone(),
+                outcome: PageOutcome::Failed,
+            });
+        }
+        if saved && fresh_summary {
             stale_summary = false;
             for position in std::mem::take(&mut stale_pages) {
                 if position != i {

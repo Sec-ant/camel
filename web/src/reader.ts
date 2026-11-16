@@ -12,6 +12,7 @@ export interface Reader {
 }
 
 export const reader = signal<Reader | null>(null);
+let openGeneration = 0;
 
 async function saveFile(directory: FileSystemDirectoryHandle, name: string, file: File): Promise<void> {
   const handle = await directory.getFileHandle(name, { create: true });
@@ -43,7 +44,18 @@ async function persistComic(name: string, comic: ComicFiles): Promise<FileSystem
 }
 
 export async function openReader(comic: ComicFiles, directory?: FileSystemDirectoryHandle): Promise<void> {
-  const opened = await openComic(comic);
+  const generation = ++openGeneration;
+  let opened: Awaited<ReturnType<typeof openComic>>;
+  try {
+    opened = await openComic(comic);
+  } catch (error) {
+    if (generation !== openGeneration) return;
+    throw error;
+  }
+  if (generation !== openGeneration) {
+    await call("closeComic", { id: opened.id });
+    return;
+  }
   if (opened.pages.length === 0) {
     await call("closeComic", { id: opened.id });
     throw new Error("This comic has no PNG or JPEG pages.");

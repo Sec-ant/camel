@@ -5,7 +5,7 @@
 import { type PageSource, openPageSource } from "../comic-source.ts";
 import { type Handlers, serve } from "../rpc.ts";
 import type { ComicFiles, ExportTarget } from "../storage/files.ts";
-import { DirectoryStore, type StoreDescriptor, openStore } from "../storage/store.ts";
+import { DirectoryStore, type StoreDescriptor, openStore, writeExportFile } from "../storage/store.ts";
 import init, {
   type ExportOutput,
   type JsHost,
@@ -20,6 +20,7 @@ import init, {
   translate,
 } from "../wasm/camel_web.js";
 import { Cancellation, createHost } from "./host.ts";
+import { exportSnapshot } from "./snapshot.ts";
 import type { JobSpec, OperationResult, PipelineEvent, PipelineRequests } from "./protocol.ts";
 
 const WASM = new URL("camel_web_bg.wasm", import.meta.url);
@@ -57,7 +58,7 @@ function exportOutput(target: ExportTarget): { output: ExportOutput; close(ok: b
     return {
       output: {
         async writeFile(path, bytes) {
-          await store.write(path, bytes, { kind: "replace" });
+          await writeExportFile(store, path, bytes);
         },
         writeArchive: () => Promise.reject(new Error("This export writes one file per page")),
       },
@@ -134,7 +135,9 @@ const handlers: Handlers<PipelineRequests, PipelineEvent> = {
     const cancellation = new Cancellation();
     running = cancellation;
     try {
-      const host = createHost(openStore(store), cancellation, emit);
+      const openedStore = openStore(store);
+      const project = job.kind === "export" ? await exportSnapshot(openedStore) : openedStore;
+      const host = createHost(project, cancellation, emit);
       return [JSON.parse(await run(job, host, comic, comicId, font, cancellation, emit)) as OperationResult];
     } finally {
       running = null;

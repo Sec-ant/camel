@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use camel_project::{Record, edit};
 
-use super::{plan::save_edited, read, write_atomic};
+use super::{
+    plan::{load_edited, save_edited},
+    read, write_atomic,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Review {
@@ -162,12 +165,13 @@ pub fn apply_review(project: &Path, input: &Path) -> Result<()> {
     let index: Vec<String> = read(&project.join("index.json"))?;
     let mut seen = BTreeSet::new();
     let mut checked_plan = false;
+    let mut checked_pages = Vec::with_capacity(review.pages.len());
     // Validate every page before changing any project record.
     for page in &review.pages {
         if !index.contains(&page.page) || !seen.insert(&page.page) {
             bail!("unknown or duplicate review page {}", page.page);
         }
-        let record: Record = read(&project.join(&page.page))?;
+        let (revision, record) = load_edited(project, &page.page)?;
         let mut ids = BTreeSet::new();
         for dialogue in &page.regions {
             let region = record
@@ -245,9 +249,9 @@ pub fn apply_review(project: &Path, input: &Path) -> Result<()> {
             super::plan::repaired_plan(project, &page.page, &record)?;
             checked_plan = true;
         }
+        checked_pages.push((revision, record));
     }
-    for page in review.pages {
-        let mut record: Record = read(&project.join(&page.page))?;
+    for (page, (revision, mut record)) in review.pages.into_iter().zip(checked_pages) {
         let mut preservation_changed = false;
         if let Some(preserve) = page.preserve_original {
             preservation_changed |= edit::set_page_preserved(&mut record, preserve);
@@ -282,7 +286,13 @@ pub fn apply_review(project: &Path, input: &Path) -> Result<()> {
             }
         }
         edit::finish(&mut record, preservation_changed);
-        save_edited(project, &page.page, &record, preservation_changed)?;
+        save_edited(
+            project,
+            &page.page,
+            &record,
+            preservation_changed,
+            &revision,
+        )?;
     }
     Ok(())
 }

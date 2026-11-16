@@ -19,13 +19,18 @@ test("progress tracks page states and counts from several workers", () => {
   assert.deepEqual(progress.units, { finished: 3, total: 10, label: "pages" });
 });
 
-test("translation marks saved pages done and lists page warnings as problems", () => {
+test("translation tracks outcomes separately from saved checkpoints", () => {
   const progress = new Progress(records);
   progress.apply({ type: "page_started", task: "translate", page: "00004.json", index: 4, total: 10 }, 0);
   progress.apply({ type: "warning", page: "00004.json", message: "content filter" }, 0);
   progress.apply({ type: "warning", page: null, message: "prompt omits terminology" }, 0);
   progress.apply({ type: "page_saved", page: "00004.json" }, 1);
-  assert.equal(progress.states[3], PAGE_DONE);
+  assert.equal(progress.states[3], PAGE_RUNNING);
+  progress.apply({ type: "page_finished", page: "00004.json", outcome: "failed" }, 2);
+  assert.equal(progress.states[3], PAGE_FAILED);
+  progress.apply({ type: "page_finished", page: "00003.json", outcome: "skipped" }, 2);
+  progress.apply({ type: "page_finished", page: "00002.json", outcome: "done" }, 2);
+  assert.deepEqual([progress.done, progress.skipped, progress.failed], [1, 1, 1]);
   assert.deepEqual(progress.problems, [{ index: 3, message: "content filter", tone: "warning" }]);
 });
 

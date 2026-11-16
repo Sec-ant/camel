@@ -5,7 +5,9 @@ import { t } from "./i18n.ts";
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { call, openComic } from "./engine.ts";
-import { NewProject } from "./NewProject.tsx";
+import { NewProject, analysisStarting } from "./NewProject.tsx";
+import { ComicSelection } from "./comic-selection.ts";
+import { jobRunning, jobVersion } from "./pipeline/jobs.ts";
 import { openReader, reader, storedComic } from "./reader.ts";
 import { installStarterProject } from "./starter.ts";
 import { recordReference } from "./protocol.ts";
@@ -24,6 +26,7 @@ import {
   chooseFont,
   chooseProject,
   deleteBrowserProject,
+  downloadLegacyChanges,
   forgetProject,
   recentProjects,
   rememberProject,
@@ -51,13 +54,6 @@ interface ComicState {
   readonly pages: string[];
 }
 
-/** Opens `choice` in the page-engine worker and releases the comic it replaces. */
-export async function replaceComic(previous: { readonly id: number } | null, choice: ComicChoice): Promise<{ id: number; pages: string[] }> {
-  // A comic that fails to close belongs to a worker that is gone.
-  if (previous) void call("closeComic", { id: previous.id }).catch(() => undefined);
-  return openComic(choice.comic);
-}
-
 export type Check = { readonly state: "idle" | "checking" | "ok" } | { readonly state: "error"; readonly message: string };
 
 export function errorMessage(error: unknown): string {
@@ -69,6 +65,8 @@ export function comicName(choice: ComicChoice): string {
 }
 
 export function OpenScreen() {
+  void jobVersion.value;
+  const busy = jobRunning() || analysisStarting.value;
   const mode = openMode.value;
   const interacted = useRef(false);
   const [advanced, setAdvanced] = useState(false);
@@ -84,9 +82,9 @@ export function OpenScreen() {
   return (
     <main class="open-screen">
       <div class="buttons joined mode-switch" role="group" aria-label={t("Project")}>
-        <button type="button" class="button" aria-pressed={mode === "open"} onClick={() => { interacted.current = true; openMode.value = "open"; }}>
+        <button type="button" class="button" disabled={busy} aria-pressed={mode === "open"} onClick={() => { interacted.current = true; openMode.value = "open"; }}>
           {t("Open project")}</button>
-        <button type="button" class="button" aria-pressed={mode === "new"} onClick={() => { interacted.current = true; openMode.value = "new"; }}>
+        <button type="button" class="button" disabled={busy} aria-pressed={mode === "new"} onClick={() => { interacted.current = true; openMode.value = "new"; }}>
           {t("New project")}</button>
       </div>
       {/* Both stay mounted so choices (and a running analysis view) survive switching. */}
@@ -94,7 +92,7 @@ export function OpenScreen() {
         <OpenProject mayOpenStarter={() => !interacted.current} />
       </div>
       <div class="open-mode" hidden={mode !== "new"}>
-        {advanced ? <><button class="link" type="button" onClick={() => setAdvanced(false)}>{t("Back to open comic")}</button><NewProject /></> : (
+        {advanced ? <><button class="link" type="button" disabled={busy} onClick={() => setAdvanced(false)}>{t("Back to open comic")}</button><NewProject /></> : (
           <section class="open-panel" aria-labelledby="comic-title">
             <div class="section-head"><h2 id="comic-title">{t("Open a comic")}</h2></div>
             <p class="helper pad">{t("Choose a CBZ/ZIP, CBR/RAR, PNG, JPEG, or image folder. Read it now and analyze it when you are ready to edit.")}</p>
@@ -112,6 +110,10 @@ export function OpenScreen() {
 
 function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolean }) {
   const [projectState, setProject] = useState<ProjectState | null>(null);
+  const projectGeneration = useRef(0);
+  const comicGeneration = useRef(0);
+  const storedGeneration = useRef(0);
+  const [chooser] = useState(() => new ComicSelection());
   const [projectCheck, setProjectCheck] = useState<Check>({ state: "idle" });
   const [comic, setComic] = useState<ComicState | null>(null);
   const [comicCheck, setComicCheck] = useState<Check>({ state: "idle" });
@@ -121,11 +123,14 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
+  useEffect(() => () => { projectGeneration.current++; comicGeneration.current++; storedGeneration.current++; chooser.dispose(); }, []);
+
   useEffect(() => {
     void installStarterProject().then(async (handle) => {
-      if (handle && !reader.value && mayOpenStarter()) await openStored(handle);
+      const current = (): boolean => !reader.value && mayOpenStarter();
+      if (handle && current()) await openStored(handle, current);
       else setStored(await browserProjects());
-    }).catch((error: unknown) => setOpenError(errorMessage(error)));
+    }).catch((error: unknown) => { if (mayOpenStarter()) setOpenError(errorMessage(error)); });
   }, []);
 
   useEffect(() => {
@@ -169,25 +174,34 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
     };
   }, [comic, projectState]);
 
-  const loadProject = async (choice: ProjectChoice): Promise<void> => {
+  const loadProject = async (choice: ProjectChoice): Promise<boolean> => {
+    storedGeneration.current++;
+    const generation = ++projectGeneration.current;
     setProjectCheck({ state: "checking" });
     try {
       const index = await readIndex(choice.files);
       const first = index[0] ? await choice.files.read(index[0]) : null;
+      if (generation !== projectGeneration.current) return false;
       setProject({ choice, pages: index.length, reference: first ? recordReference(first.text) : null });
       setProjectCheck({ state: "ok" });
+      return true;
     } catch (error) {
+      if (generation !== projectGeneration.current) return false;
       setProject(null);
       setProjectCheck({ state: "error", message: errorMessage(error) });
+      return false;
     }
   };
 
   const loadComic = async (choice: ComicChoice): Promise<void> => {
+    storedGeneration.current++;
+    comicGeneration.current++;
     setComicCheck({ state: "checking" });
     try {
-      setComic({ choice, ...(await replaceComic(comic, choice)) });
+      const opened = await chooser.choose(choice.comic);
+      if (!opened) return;
+      setComic({ choice, ...opened });
     } catch (error) {
-      setComic(null);
       setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${errorMessage(error)}` });
     }
   };
@@ -198,6 +212,9 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
 
   const open = async (): Promise<void> => {
     if (!projectState || !font) return;
+    const generation = projectGeneration.current;
+    const comicSelection = comicGeneration.current;
+    const isCurrent = (): boolean => generation === projectGeneration.current && comicSelection === comicGeneration.current;
     setOpenError(null);
     setProgress({ done: 0, total: projectState.pages });
     try {
@@ -205,37 +222,56 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
         files: projectState.choice.files,
         comic: comic && comicCheck.state === "ok" ? { id: comic.id, files: comic.choice.comic, pages: comic.pages } : null,
         font,
-        onProgress: (done, total) => setProgress({ done, total }),
+        onProgress: (done, total) => { if (isCurrent()) setProgress({ done, total }); },
+        isCurrent,
       });
+      if (!isCurrent()) { setProgress(null); return; }
       if (projectState.choice.handle) {
         await rememberProject({
           name: projectState.choice.files.name,
           opened: Date.now(),
           project: projectState.choice.handle,
-          comic: comic?.choice.handle ?? null,
+          comic: comicCheck.state === "ok" ? (comic?.choice.handle ?? null) : null,
         });
       }
+      if (!isCurrent()) { setProgress(null); return; }
+      if (comic && comicCheck.state === "ok") chooser.release(comic.id);
       await start(session);
     } catch (error) {
       setProgress(null);
-      setOpenError(errorMessage(error));
+      if (isCurrent()) setOpenError(errorMessage(error));
     }
   };
 
   // Projects can include their original images in an images/ folder.
-  const openStored = async (handle: FileSystemDirectoryHandle): Promise<void> => {
+  const openStored = async (handle: FileSystemDirectoryHandle, gate: () => boolean = () => true): Promise<void> => {
+    const generation = ++storedGeneration.current;
+    const isCurrent = (): boolean => generation === storedGeneration.current && gate();
     const projectFiles = new ProjectFiles(new DirectoryStore(handle));
     const manifest = await projectFiles.read("reader.json");
+    if (!isCurrent()) return;
     if (manifest) {
       const comicFiles = await storedComic(handle);
+      if (!isCurrent()) return;
       if (!(await projectFiles.read("index.json"))) {
+        if (!isCurrent()) return;
         await openReader(comicFiles, handle);
         return;
       }
       const selectedFont = await rememberedFont();
+      if (!isCurrent()) return;
       if (!selectedFont) { await loadProject({ files: projectFiles, handle: null }); return; }
       const comic = await openComic(comicFiles);
-      const opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined });
+      if (!isCurrent()) { void call("closeComic", { id: comic.id }).catch(() => undefined); return; }
+      let opened: Session;
+      try {
+        opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined, isCurrent });
+      } catch (error) {
+        void call("closeComic", { id: comic.id }).catch(() => undefined);
+        if (!isCurrent()) return;
+        throw error;
+      }
+      if (!isCurrent()) { opened.dispose(); return; }
       await start(opened);
       return;
     }
@@ -256,24 +292,43 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
       }
     }
     const selectedFont = await rememberedFont();
+    if (!isCurrent()) return;
     if (!selectedFont || images.length === 0) {
       await loadProject({ files: projectFiles, handle: null });
       return;
     }
     const comicFiles = { kind: "images" as const, name: handle.name, files: images };
     const comic = await openComic(comicFiles);
-    const opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined });
+    if (!isCurrent()) { void call("closeComic", { id: comic.id }).catch(() => undefined); return; }
+    let opened: Session;
+    try {
+      opened = await Session.open({ files: projectFiles, comic: { ...comic, files: comicFiles }, font: selectedFont, onProgress: () => undefined, isCurrent });
+    } catch (error) {
+      void call("closeComic", { id: comic.id }).catch(() => undefined);
+      if (!isCurrent()) return;
+      throw error;
+    }
+    if (!isCurrent()) { opened.dispose(); return; }
     await start(opened);
   };
 
   const reopenRecent = async (entry: RecentProject): Promise<void> => {
-    const { files, comic: comicFiles } = await reopen(entry);
-    await loadProject({ files, handle: entry.project });
-    if (comicFiles) await loadComic({ comic: comicFiles, handle: entry.comic });
+    const generation = ++projectGeneration.current;
+    storedGeneration.current++;
+    setProjectCheck({ state: "checking" });
+    try {
+      const { files, comic: comicFiles } = await reopen(entry);
+      if (generation !== projectGeneration.current) return;
+      const accepted = await loadProject({ files, handle: entry.project });
+      if (accepted && comicFiles) await loadComic({ comic: comicFiles, handle: entry.comic });
+    } catch (error) {
+      if (generation === projectGeneration.current) setProjectCheck({ state: projectState ? "ok" : "idle" });
+      throw error;
+    }
   };
 
-  const comicWarning = !comic && projectState ? "Without the comic, pages open without images and cannot be edited." : null;
-  const ready = projectState !== null && font !== null && comicCheck.state !== "checking";
+  const comicWarning = (!comic || comicCheck.state === "error") && projectState ? "Without the comic, pages open without images and cannot be edited." : null;
+  const ready = projectState !== null && projectCheck.state === "ok" && font !== null && comicCheck.state !== "checking";
 
   return (
     <>
@@ -291,11 +346,21 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
           status={projectState && `${projectState.choice.files.name} · ${projectState.pages} pages`}
         >
           <button type="button" class="button" onClick={pick(async () => {
+            const generation = ++projectGeneration.current;
+            storedGeneration.current++;
             const choice = await chooseProject();
-            if (choice) await loadProject(choice);
+            if (choice && generation === projectGeneration.current) await loadProject(choice);
+            else if (!choice && generation === projectGeneration.current) setProjectCheck({ state: projectState ? "ok" : "idle" });
           })}>
             {t("Choose folder…")}</button>
         </Slot>
+        {(projectState?.choice.legacyChanges || projectState?.choice.previousSnapshots?.length) && (
+          <div class="alert" role="status">
+            <p>{t("Previous edits exist for a project with this folder name. Download them and check which project they belong to. Deleted paths are listed in the archive.")}</p>
+            {projectState.choice.legacyChanges && <button type="button" class="button" onClick={pick(() => downloadLegacyChanges(projectState.choice.legacyChanges!))}>{t("Download previous edits")}</button>}
+            {projectState.choice.previousSnapshots?.map(({ identity, store }) => <button type="button" class="button" key={identity} onClick={pick(() => downloadLegacyChanges(store))}>{t("Download previous edits")} · {identity.slice(0, 12)}</button>)}
+          </div>
+        )}
         <Slot
           number={2}
           title={t("Comic")}
@@ -355,16 +420,16 @@ function OpenProject({ mayOpenStarter }: { readonly mayOpenStarter: () => boolea
             <h2 id="recent-title">{t("Recent projects")}</h2>
           </div>
           <ol class="rows">
-            {recent.map((entry) => (
-              <li key={entry.name} class="recent">
+            {recent.map((entry, index) => (
+              <li key={`${entry.name}:${entry.opened}:${index}`} class="recent">
                 <span>{entry.name}</span>
-                <span class="mono dim">{new Date(entry.opened).toLocaleDateString("en-CA")}</span>
+                <span class="mono dim">{new Date(entry.opened).toLocaleString()}</span>
                 <button type="button" class="button small" onClick={pick(() => reopenRecent(entry))}>
                   {t("Reopen")}</button>
                 <button
                   type="button"
                   class="link"
-                  onClick={() => void forgetProject(entry.name).then(() => recentProjects().then(setRecent))}
+                  onClick={() => void forgetProject(entry).then(() => recentProjects().then(setRecent)).catch((error: unknown) => setOpenError(errorMessage(error)))}
                 >
                   {t("Forget")}</button>
               </li>

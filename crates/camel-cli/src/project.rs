@@ -16,7 +16,7 @@ pub use audit::audit;
 mod export;
 pub use export::{erase, render};
 mod inspect;
-pub use inspect::inspect;
+pub use inspect::{inspect, inspect_status};
 mod plan;
 pub use plan::prepare;
 mod preflight;

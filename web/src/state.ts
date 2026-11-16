@@ -2,7 +2,7 @@
 
 import { batch, computed, signal } from "@preact/signals";
 import type { Edit, EditResult, PageDocument, Preview, Project, Region } from "./model.ts";
-import { type ReviewItem, REPORTS, auditItems, itemsByPage, latestReport, termItems } from "./reports.ts";
+import { type AuditFailure, type ReviewItem, REPORTS, auditFailures, auditItems, itemsByPage, latestReport, termItems } from "./reports.ts";
 import type { Session } from "./session.ts";
 import { HostError } from "./storage/store.ts";
 import { type PageFilter, adjacentMatch } from "./pages.ts";
@@ -36,6 +36,8 @@ export interface MaskOverride {
 
 export interface Draft {
   readonly bounds: Rect;
+  readonly source: string;
+  readonly translation: string;
 }
 
 function stored<T>(key: string, fallback: T): T {
@@ -78,6 +80,7 @@ export const openMode = signal<"open" | "new">("new");
 
 /** Review items of the latest audit and check-terms reports, by record file name. */
 export const reviewItems = signal<ReadonlyMap<string, readonly ReviewItem[]>>(new Map());
+export const reviewFailures = signal<readonly AuditFailure[]>([]);
 /** Paths of the reports `reviewItems` came from. */
 export const reviewSources = signal<{ readonly audit: string | null; readonly terms: string | null }>({
   audit: null,
@@ -115,6 +118,14 @@ export const saveState = signal<SaveState>("idle");
 export const notice = signal<Notice | null>(null);
 export const overrides = signal<ReadonlyMap<number, MaskOverride>>(new Map());
 export const draft = signal<Draft | null>(null);
+const pageDrafts = new Map<number, Draft>();
+
+/** Updates the current page's unsaved new-region draft. */
+export function setDraft(value: Draft | null): void {
+  if (value) pageDrafts.set(pageIndex.value, value);
+  else pageDrafts.delete(pageIndex.value);
+  draft.value = value;
+}
 export const pageFilter = signal<PageFilter>("all");
 export const railOpen = signal(preferences.railOpen);
 export const helpOpen = signal(false);
@@ -152,45 +163,78 @@ export function announce(text: string, tone: Notice["tone"] = "info"): void {
 
 // Uncommitted text fields register a commit callback so navigation and polling can respect
 // them.
-const dirtyFields = new Set<() => Promise<void>>();
+const dirtyFields = new Set<() => Promise<boolean>>();
 
-export function registerDirtyField(commit: () => Promise<void>): () => void {
+export function registerDirtyField(commit: () => Promise<boolean>): () => void {
   dirtyFields.add(commit);
   return () => dirtyFields.delete(commit);
 }
 
-export async function flushFields(): Promise<void> {
-  await Promise.all([...dirtyFields].map((commit) => commit()));
+export async function flushFields(): Promise<boolean> {
+  const failures = writeFailures;
+  const results = await Promise.all([...dirtyFields].map((commit) => commit()));
+  let observed: Promise<unknown>;
+  do {
+    observed = queue;
+    await observed;
+  } while (observed !== queue);
+  return results.every(Boolean) && failures === writeFailures;
+}
+
+/** Ensures exported or processed data includes all pending user edits. */
+export async function flushForSnapshot(): Promise<boolean> {
+  if (!(await flushFields())) return false;
+  if (pageDrafts.size) {
+    const pages = [...pageDrafts.keys()].sort((a, b) => a - b).map((index) => index + 1).join(", ");
+    announce(`Finish or cancel the new-region drafts on pages ${pages} before continuing`, "error");
+    return false;
+  }
+  return true;
 }
 
 /** True while a brush stroke or rectangle drag is in progress. */
 export const gestureActive = signal(false);
+let cancelGesture: (() => void) | null = null;
+
+export function registerGestureCancellation(cancel: () => void): () => void {
+  cancelGesture = cancel;
+  return () => { if (cancelGesture === cancel) cancelGesture = null; };
+}
+
+export function cancelActiveGesture(): void {
+  cancelGesture?.();
+}
 
 // Server writes are serialized so each request carries the revision returned by the previous
 // one.
 let queue: Promise<unknown> = Promise.resolve();
 let inflight = 0;
 let writeEpoch = 0;
+let writeFailures = 0;
 
-function enqueue(run: (current: PageDocument) => Promise<EditResult>): Promise<EditResult | null> {
+function enqueue(run: (current: PageDocument, owner: Session) => Promise<EditResult>): Promise<EditResult | null> {
   const index = pageIndex.value;
+  const owner = session;
   inflight++;
   writeEpoch++;
   saveState.value = "saving";
   const task = queue.then(async () => {
     try {
       const current = doc.value;
-      if (!current || current.index !== index) {
-        saveState.value = "idle";
+      if (!owner || session !== owner || !current || current.index !== index) {
+        writeFailures++;
+        saveState.value = "error";
         announce(`An edit to page ${index + 1} was not saved: the page was left before it could be written`, "error");
         return null;
       }
-      const result = await run(current);
-      if (pageIndex.value === index) acceptDocument(result.page);
+      const result = await run(current, owner);
+      if (session === owner && pageIndex.value === index) acceptDocument(result.page);
       if (result.warning) announce(result.warning, "error");
       return result;
     } catch (error) {
-      await handleWriteError(error, index);
+      writeFailures++;
+      if (session === owner) await handleWriteError(error, index);
+      else announce(error instanceof Error ? error.message : String(error), "error");
       return null;
     } finally {
       inflight--;
@@ -199,7 +243,7 @@ function enqueue(run: (current: PageDocument) => Promise<EditResult>): Promise<E
   });
   queue = task;
   void task.then(async (result) => {
-    if (result) {
+    if (result && session === owner) {
       schedulePreview(250);
       void refreshProject();
       if (session) localChanges.value = await session.changeCount();
@@ -209,15 +253,24 @@ function enqueue(run: (current: PageDocument) => Promise<EditResult>): Promise<E
 }
 
 export function submit(edits: readonly Edit[]): Promise<EditResult | null> {
-  return enqueue((current) => session!.edits(current.index, current.revision, edits));
+  return enqueue((current, owner) => owner.edits(current.index, current.revision, edits));
+}
+
+/** Apply a report suggestion only to the translation it was reviewed against. */
+export function applySuggestion(region: number, source: string, expected: string | null, text: string): Promise<EditResult | null> {
+  return enqueue((current, owner) => {
+    const target = current.regions.find((item) => item.id === region);
+    if (!target || target.source !== source || target.translation !== expected) throw new Error("The source or translation changed since this report; review the suggestion again.");
+    return owner.edits(current.index, current.revision, [{ op: "set_translation", region, text }]);
+  });
 }
 
 export function undo(): Promise<EditResult | null> {
-  return enqueue((current) => session!.undo(current.index, current.revision));
+  return enqueue((current, owner) => owner.undo(current.index, current.revision));
 }
 
 export function redo(): Promise<EditResult | null> {
-  return enqueue((current) => session!.redo(current.index, current.revision));
+  return enqueue((current, owner) => owner.redo(current.index, current.revision));
 }
 
 async function reportFailure(action: () => Promise<void>): Promise<void> {
@@ -229,11 +282,11 @@ async function reportFailure(action: () => Promise<void>): Promise<void> {
 }
 
 export function downloadChanges(): Promise<void> {
-  return reportFailure(() => session!.downloadChanges());
+  return reportFailure(async () => { if (await flushForSnapshot()) await session!.downloadChanges(); });
 }
 
 export function downloadProject(): Promise<void> {
-  return reportFailure(() => session!.downloadProject());
+  return reportFailure(async () => { if (await flushForSnapshot()) await session!.downloadProject(); });
 }
 
 /** Overlay projects: drops locally stored edits (after unpacking the download) and reopens. */
@@ -245,25 +298,29 @@ export async function discardChanges(): Promise<void> {
 
 /** Loads the review items of the newest audit and check-terms reports. */
 async function loadReviews(): Promise<void> {
-  if (!session) return;
-  const { store } = session.files;
+  const owner = session;
+  if (!owner) return;
+  const { store } = owner.files;
   const names = await store.list(REPORTS);
   const audit = latestReport(names, "audit");
   const terms = latestReport(names, "terms");
   const decoder = new TextDecoder();
-  const read = async (path: string | null, parse: (json: string) => ReviewItem[]): Promise<ReviewItem[]> => {
+  const read = async <T>(path: string | null, parse: (json: string) => T, empty: T): Promise<T> => {
     const stored = path ? await store.read(path) : null;
-    if (!stored) return [];
+    if (!stored) return empty;
     try {
       return parse(decoder.decode(stored.bytes));
     } catch (error) {
       announce(`${path} could not be read: ${error instanceof Error ? error.message : String(error)}`, "error");
-      return [];
+      return empty;
     }
   };
-  const items = [...(await read(audit, auditItems)), ...(await read(terms, termItems))];
+  const review = await read(audit, (json) => ({ items: auditItems(json), failures: auditFailures(json) }), { items: [], failures: [] });
+  const items = [...review.items, ...(await read(terms, termItems, []))];
+  if (session !== owner) return;
   batch(() => {
     reviewItems.value = itemsByPage(items);
+    reviewFailures.value = review.failures;
     reviewSources.value = { audit, terms };
   });
 }
@@ -280,7 +337,7 @@ async function handleWriteError(error: unknown, index: number): Promise<void> {
   if (error instanceof HostError && error.kind === "conflict") {
     // The reload brings the view in sync with the project files; nothing is left unsaved
     // except the rejected change, which the notice reports.
-    saveState.value = "idle";
+    saveState.value = "error";
     announce("Conflict: the page changed elsewhere; reloaded the latest version", "error");
     if (pageIndex.value === index) await reloadPage();
     return;
@@ -328,11 +385,12 @@ function schedulePreview(delay: number): void {
 
 async function loadPreview(): Promise<void> {
   const current = doc.value;
-  if (!current || !session) return;
+  const owner = session;
+  if (!current || !owner) return;
   const token = ++previewToken;
   try {
-    const result = await session.preview(current.index);
-    if (token === previewToken && doc.value?.index === current.index) preview.value = result;
+    const result = await owner.preview(current.index);
+    if (session === owner && token === previewToken && doc.value?.index === current.index) preview.value = result;
   } catch (error) {
     if (token === previewToken) {
       announce(`Preview failed: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -342,24 +400,32 @@ async function loadPreview(): Promise<void> {
   }
 }
 
-async function loadImage(index: number): Promise<void> {
+async function loadImage(owner: Session, index: number): Promise<void> {
   try {
-    const url = (await session?.pageImage(index)) ?? null;
-    if (pageIndex.value === index) pageImage.value = { index, url };
-    if (url) session?.prefetch(index + 1);
+    const url = await owner.pageImage(index);
+    if (session === owner && pageIndex.value === index) {
+      pageImage.value = { index, url };
+      if (url) owner.prefetch(index + 1);
+    }
   } catch (error) {
-    if (pageIndex.value === index) {
+    if (session === owner && pageIndex.value === index) {
       pageImage.value = { index, url: null, error: error instanceof Error ? error.message : String(error) };
     }
   }
 }
 
 let loadToken = 0;
+let navigationToken = 0;
+let selectionToken = 0;
 
 export async function openPage(index: number, region: number | null = null): Promise<void> {
+  const owner = session;
   const pages = project.value?.pages;
-  if (!pages || index < 0 || index >= pages.length) return;
-  await flushFields();
+  if (!owner || !pages || index < 0 || index >= pages.length) return;
+  const navigation = ++navigationToken;
+  selectionToken++;
+  if (!(await flushFields()) || navigation !== navigationToken || session !== owner) return;
+  cancelActiveGesture();
   const token = ++loadToken;
   previewToken++;
   clearTimeout(previewTimer);
@@ -372,14 +438,14 @@ export async function openPage(index: number, region: number | null = null): Pro
     selection.value = region;
     hoveredUnresolved.value = null;
     overrides.value = new Map();
-    draft.value = null;
+    draft.value = pageDrafts.get(index) ?? null;
     loadError.value = null;
   });
   writeHash();
   try {
-    void loadImage(index);
-    const page = await session!.page(index);
-    if (token !== loadToken) return;
+    void loadImage(owner, index);
+    const page = await owner.page(index);
+    if (token !== loadToken || session !== owner) return;
     acceptDocument(page);
     schedulePreview(0);
   } catch (error) {
@@ -390,9 +456,11 @@ export async function openPage(index: number, region: number | null = null): Pro
 
 async function reloadPage(): Promise<void> {
   const index = pageIndex.value;
+  const owner = session;
+  if (!owner) return;
   try {
-    const page = await session!.page(index);
-    if (pageIndex.value !== index) return;
+    const page = await owner.page(index);
+    if (session !== owner || pageIndex.value !== index) return;
     batch(() => {
       overrides.value = new Map();
       acceptDocument(page);
@@ -416,17 +484,23 @@ export function stepFilteredPage(direction: 1 | -1): void {
   else void openPage(next);
 }
 
-export function selectRegion(id: number | null): void {
+export async function selectRegion(id: number | null): Promise<boolean> {
+  const token = ++selectionToken;
+  const index = pageIndex.value;
+  const currentSession = session;
+  if (selection.value !== id && !(await flushFields())) return false;
+  if (token !== selectionToken || pageIndex.value !== index || session !== currentSession) return false;
   batch(() => {
     selection.value = id;
     draft.value = null;
   });
   writeHash();
+  return true;
 }
 
-export function stepRegion(direction: 1 | -1): void {
+export async function stepRegion(direction: 1 | -1): Promise<boolean> {
   const regions = doc.value?.regions;
-  if (!regions?.length) return;
+  if (!regions?.length) return false;
   const at = regions.findIndex((region) => region.id === selection.value);
   const next =
     at < 0
@@ -434,7 +508,7 @@ export function stepRegion(direction: 1 | -1): void {
         ? 0
         : regions.length - 1
       : Math.min(regions.length - 1, Math.max(0, at + direction));
-  selectRegion(regions[next]!.id);
+  return selectRegion(regions[next]!.id);
 }
 
 let polling: Promise<void> | null = null;
@@ -466,11 +540,12 @@ function refreshProject(poll = false): Promise<void> {
 }
 
 async function pollOnce(): Promise<void> {
-  if (!session) return;
+  const owner = session;
+  if (!owner) return;
   const epoch = writeEpoch;
   let next: Project;
   try {
-    next = await session.poll();
+    next = await owner.poll();
   } catch (error) {
     // Polls repeat every few seconds: a failure is reported once, until a poll succeeds.
     if (!pollFailed) {
@@ -479,6 +554,7 @@ async function pollOnce(): Promise<void> {
     pollFailed = true;
     return;
   }
+  if (session !== owner) return;
   pollFailed = false;
   await showProject(next, epoch);
 }
@@ -513,25 +589,59 @@ function readHash(): { page: number; region: number | null } {
   return { page: Number(match[1]) - 1, region: match[2] === undefined ? null : Number(match[2]) };
 }
 
+let stopWatching: (() => void) | null = null;
+
 export async function start(opened: Session): Promise<void> {
+  const previous = session;
+  stopWatching?.();
+  stopWatching = null;
+  loadToken++;
+  navigationToken++;
+  selectionToken++;
+  previewToken++;
+  clearTimeout(previewTimer);
+  pageDrafts.clear();
   session = opened;
-  project.value = opened.project();
-  localChanges.value = await opened.changeCount();
+  if (previous && previous !== opened) previous.dispose(opened.comicId);
+  batch(() => {
+    project.value = opened.project();
+    doc.value = null;
+    preview.value = null;
+    pageImage.value = null;
+  });
+  const changes = await opened.changeCount();
+  if (session !== opened) return;
+  localChanges.value = changes;
   const { page, region } = readHash();
-  const count = project.value.pages.length;
+  const count = opened.project().pages.length;
   await openPage(Math.min(Math.max(page, 0), Math.max(count - 1, 0)), region);
+  if (session !== opened) return;
+  const onVisibility = (): void => {
+    if (document.visibilityState === "visible") void refreshProject(true);
+  };
+  let timer: ReturnType<typeof setInterval> | undefined;
   if (opened.location === "folder") {
-    setInterval(() => {
-      if (document.visibilityState === "visible") void refreshProject(true);
-    }, 5000);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") void refreshProject(true);
-    });
+    timer = setInterval(onVisibility, 5000);
+    document.addEventListener("visibilitychange", onVisibility);
   }
   void loadReviews();
-  addEventListener("hashchange", () => {
+  const onHash = (): void => {
     const target = readHash();
     if (target.page !== pageIndex.value) void openPage(target.page, target.region);
-    else if (target.region !== selection.value) selectRegion(target.region);
-  });
+    else if (target.region !== selection.value) void selectRegion(target.region).then((changed) => { if (!changed) writeHash(); });
+  };
+  const onBeforeUnload = (event: BeforeUnloadEvent): void => {
+    if (pageDrafts.size || dirtyFields.size || inflight > 0) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  };
+  addEventListener("hashchange", onHash);
+  addEventListener("beforeunload", onBeforeUnload);
+  stopWatching = () => {
+    if (timer !== undefined) clearInterval(timer);
+    if (opened.location === "folder") document.removeEventListener("visibilitychange", onVisibility);
+    removeEventListener("hashchange", onHash);
+    removeEventListener("beforeunload", onBeforeUnload);
+  };
 }

@@ -176,12 +176,19 @@ fn filter_marker(path: &str) -> String {
     format!("{}.filtered", path.strip_suffix(".json").unwrap_or(path))
 }
 
+#[derive(PartialEq, Eq)]
+enum FailureClass {
+    Other,
+    ContentFilter,
+    Cancelled,
+}
+
 struct Failure {
     message: String,
     retryable: bool,
     retry_after: Option<Duration>,
     fallback: bool,
-    content_filter: bool,
+    class: FailureClass,
 }
 
 impl Failure {
@@ -191,18 +198,26 @@ impl Failure {
             retryable: false,
             retry_after: None,
             fallback: false,
-            content_filter: false,
+            class: FailureClass::Other,
+        }
+    }
+
+    fn cancelled() -> Self {
+        Self {
+            class: FailureClass::Cancelled,
+            ..Self::fatal("cancelled".into())
         }
     }
 
     fn transport(error: HostError) -> Self {
         match error {
+            HostError::Cancelled => Self::cancelled(),
             HostError::Network(message) => Self {
                 message,
                 retryable: true,
                 retry_after: None,
                 fallback: true,
-                content_filter: false,
+                class: FailureClass::Other,
             },
             other => Self::fatal(other.to_string()),
         }
@@ -222,7 +237,7 @@ impl Failure {
             retryable: transient,
             retry_after: delay.map(Duration::from_secs),
             fallback: transient,
-            content_filter: false,
+            class: FailureClass::Other,
         }
     }
 }
@@ -344,7 +359,14 @@ impl<'a, H: Host> Remote<'a, H> {
                     None => false,
                 };
                 if interrupted || self.stopped() {
-                    (client.model.as_str(), Err(error))
+                    (
+                        client.model.as_str(),
+                        Err(if self.host.cancelled() {
+                            Failure::cancelled()
+                        } else {
+                            error
+                        }),
+                    )
                 } else {
                     (
                         model,
@@ -356,7 +378,9 @@ impl<'a, H: Host> Remote<'a, H> {
         };
         let response = result.map_err(|error| {
             let message = format!("{model}: {}", error.message);
-            if error.content_filter {
+            if error.class == FailureClass::Cancelled {
+                TranslationError::Cancelled
+            } else if error.class == FailureClass::ContentFilter {
                 TranslationError::ContentFilter(message)
             } else if error.retryable {
                 TranslationError::TransientService(message)
@@ -388,7 +412,11 @@ impl<'a, H: Host> Remote<'a, H> {
                         delay_s: wait.as_secs(),
                     });
                     if !self.wait_for_retry(wait).await {
-                        return Err(error);
+                        return Err(if self.host.cancelled() {
+                            Failure::cancelled()
+                        } else {
+                            error
+                        });
                     }
                 }
                 result => return result,
@@ -458,7 +486,7 @@ impl<'a, H: Host> Remote<'a, H> {
                 .is_some()
         {
             return Err(Failure {
-                content_filter: true,
+                class: FailureClass::ContentFilter,
                 ..Failure::fatal("completion did not finish: content_filter (cached)".into())
             });
         }
@@ -520,7 +548,11 @@ impl<'a, H: Host> Remote<'a, H> {
             }
             return Err(Failure {
                 fallback: reason == "length",
-                content_filter: filtered,
+                class: if filtered {
+                    FailureClass::ContentFilter
+                } else {
+                    FailureClass::Other
+                },
                 ..Failure::fatal(format!("completion did not finish: {reason}"))
             });
         }

@@ -1,11 +1,15 @@
 //! `camel inspect`: per-page progress and issue counts as JSON.
 
-use std::path::Path;
+use std::{io, path::Path};
 
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use camel_project::Record;
+use camel_project::{
+    Record,
+    plan::{self, Plan, PlanError, PlanKey},
+    status::PageStatus,
+};
 
 use super::read;
 
@@ -39,4 +43,52 @@ pub fn inspect(project: &Path) -> Result<Value> {
         "preserved_pages":preserved, "pages_with_issues":with_issues,
         "content_filter_affected_pages":filter_affected}, "pages":pages}),
     )
+}
+
+/// Structured status for callers that need stable page states and actionable reasons.
+pub fn inspect_status(project: &Path) -> Result<Value> {
+    let index: Vec<String> = read(&project.join("index.json"))?;
+    let records = index
+        .iter()
+        .map(|name| read::<Record>(&project.join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    let keys: Vec<_> = records.iter().map(PlanKey::of).collect();
+    let plan = match std::fs::read(project.join("translation-plan.json")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => json!({"state":"missing"}),
+        Err(error) => return Err(error.into()),
+        Ok(bytes) => match serde_json::from_slice::<Plan>(&bytes) {
+            Err(error) => {
+                json!({"state":"invalid", "reason":error.to_string(), "actions":["prepare_scenes"]})
+            }
+            Ok(plan) => match plan::validate(&plan, &index, &plan::fingerprint(&index, &keys)) {
+                Ok(()) => json!({"state":"valid", "scenes":plan.scenes.len()}),
+                Err(PlanError::Stale) => json!({"state":"stale", "actions":["prepare_scenes"]}),
+                Err(error) => {
+                    json!({"state":"invalid", "reason":error.to_string(), "actions":["prepare_scenes"]})
+                }
+            },
+        },
+    };
+    let pages: Vec<_> = index
+        .iter()
+        .zip(&records)
+        .map(|(name, record)| {
+            let status = PageStatus::of(record);
+            let mut actions = Vec::new();
+            if status.missing > 0 && !status.content_filter_affected {
+                actions.push("translate_missing");
+            }
+            if status.unresolved > 0 && !record.preserve_original {
+                actions.push("review_unresolved");
+            }
+            if status.issues > 0 {
+                actions.push("review_issues");
+            }
+            if status.translated > 0 {
+                actions.push("check_layout");
+            }
+            json!({"file":name, "status":status, "issues":record.issues, "actions":actions})
+        })
+        .collect();
+    Ok(json!({"schema_version":1, "project":project, "plan":plan, "pages":pages}))
 }

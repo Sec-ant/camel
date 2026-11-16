@@ -5,18 +5,22 @@ export const REPORTS = "reports";
 
 export type ReportKind = "audit" | "terms" | "layout" | "export";
 
-/** Project-relative path of a new report, e.g. reports/audit-20261115-093005.json (local time). */
+/** Project-relative path of a new report, including a unique run identifier. */
 export function reportPath(kind: ReportKind, date: Date): string {
   const two = (value: number): string => String(value).padStart(2, "0");
   const day = `${date.getFullYear()}${two(date.getMonth() + 1)}${two(date.getDate())}`;
   const time = `${two(date.getHours())}${two(date.getMinutes())}${two(date.getSeconds())}`;
-  return `${REPORTS}/${kind}-${day}-${time}.json`;
+  return `${REPORTS}/${kind}-${day}-${time}-${String(date.getMilliseconds()).padStart(3, "0")}-${crypto.randomUUID()}.json`;
 }
 
 /** The newest report of `kind` among the file names in reports/ (names sort by time). */
 export function latestReport(names: readonly string[], kind: ReportKind): string | null {
-  const pattern = new RegExp(`^${kind}-\\d{8}-\\d{6}\\.json$`);
-  const matching = names.filter((name) => pattern.test(name)).sort();
+  const pattern = new RegExp(`^${kind}-(\\d{8})-(\\d{6})(?:-(\\d{3})-([a-f0-9-]{36}))?\\.json$`);
+  const sortKey = (name: string): string => {
+    const match = pattern.exec(name)!;
+    return `${match[1]}${match[2]}${match[3] ?? "000"}${match[4] ?? ""}`;
+  };
+  const matching = names.filter((name) => pattern.test(name)).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
   return matching.length > 0 ? `${REPORTS}/${matching.at(-1)}` : null;
 }
 
@@ -25,6 +29,8 @@ export interface ReviewItem {
   /** Record file name, e.g. 00010.json. */
   readonly page: string;
   readonly region: number;
+  /** Source text when the report was generated. */
+  readonly source: string | null;
   /** Short mono label: audit severity and category, or the term kind. */
   readonly label: string;
   readonly reason: string;
@@ -33,6 +39,16 @@ export interface ReviewItem {
   readonly translation: string | null;
   /** Replacement translation, or null when the fix needs a human. */
   readonly suggestion: string | null;
+}
+
+export interface AuditFailure {
+  readonly kind: "validation" | "content_filter" | "skipped" | "transient_service";
+  readonly pages: readonly string[];
+  readonly error: string;
+}
+
+export function auditFailures(json: string): readonly AuditFailure[] {
+  return (JSON.parse(json) as { audit_failures?: readonly AuditFailure[] }).audit_failures ?? [];
 }
 
 interface AuditIssue {
@@ -49,6 +65,7 @@ interface AuditIssue {
 interface TermIssue {
   readonly page: string;
   readonly region_id: number;
+  readonly source: string;
   readonly translation: string;
   readonly term: string;
   readonly expected_translation: string;
@@ -56,11 +73,12 @@ interface TermIssue {
 }
 
 export function auditItems(json: string): ReviewItem[] {
-  const report = JSON.parse(json) as { audit_issues?: readonly AuditIssue[] };
+  const report = JSON.parse(json) as { audit_issues?: readonly AuditIssue[]; pages?: readonly { page: string; regions: readonly { id: number; source: string }[] }[] };
   return (report.audit_issues ?? []).map((issue) => ({
     kind: "audit",
     page: issue.page,
     region: issue.id,
+    source: report.pages?.find((page) => page.page === issue.page)?.regions.find((region) => region.id === issue.id)?.source ?? null,
     label: `${issue.severity} · ${issue.category}`.toUpperCase(),
     reason: issue.reason,
     evidence: issue.evidence || null,
@@ -90,6 +108,7 @@ export function termItems(json: string): ReviewItem[] {
     kind: "terms",
     page: issue.page,
     region: issue.region_id,
+    source: issue.source ?? null,
     label: issue.kind === "source_retained" ? "TERM LEFT IN SOURCE" : "TERM MISSING",
     reason:
       issue.kind === "source_retained"

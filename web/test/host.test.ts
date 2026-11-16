@@ -60,6 +60,8 @@ test("failed requests are transient network errors with a reason", () => {
   const timeout = requestError(new DOMException("timed out", "TimeoutError"), 120_000, false);
   assert.equal(timeout.kind, "network");
   assert.equal(timeout.message, "no response within 120 s");
-  assert.equal(requestError(new DOMException("aborted", "AbortError"), 1000, true).message, "cancelled");
+  assert.equal(requestError(new DOMException("aborted", "AbortError"), 1000, true).kind, "cancelled");
+  assert.equal(requestError(new TypeError("Failed to fetch"), 1000, true).kind, "network");
+  assert.equal(requestError(new DOMException("timed out", "TimeoutError"), 1000, true).kind, "network");
   assert.match(requestError(new TypeError("Failed to fetch"), 1000, false).message, /could not be reached \(Failed to fetch\)/);
 });

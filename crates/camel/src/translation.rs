@@ -204,6 +204,9 @@ fn add_memory_instructions(system: &mut String, has_memory: bool) {
 /// Failure to obtain or validate a page translation.
 #[derive(Debug, thiserror::Error)]
 pub enum TranslationError {
+    /// The pending translation request was cancelled.
+    #[error("cancelled")]
+    Cancelled,
     /// The translation service rejected the request.
     #[error("translation service: {0}")]
     Service(String),

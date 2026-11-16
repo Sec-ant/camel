@@ -103,8 +103,8 @@ export function TitleBar() {
             class="title-link"
             onClick={() => {
               if (jobRunning() && !confirm(t("A job is running. Leaving stops it; running it again resumes. Leave?"))) return;
-              void flushFields().then(() => {
-                location.href = location.pathname;
+              void flushFields().then((saved) => {
+                if (saved) location.href = location.pathname;
               });
             }}
           >

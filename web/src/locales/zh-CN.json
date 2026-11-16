@@ -358,5 +358,14 @@
   "This browser cannot write to folders: the project is kept in its private storage and can be downloaded as a zip. Interrupted runs continue when started again with the same name.": "此浏览器无法写入文件夹，项目保存在浏览器存储中，可下载为 ZIP。使用相同名称可继续中断的分析。",
   "Contains an unfinished analysis: it continues where it stopped.": "包含未完成的分析，将从中断处继续。",
   "This folder already holds a project. Open it from the Open project tab, or choose an empty folder.": "此文件夹已有项目。请在“打开项目”中打开，或选择空文件夹。",
-  "This folder is not empty. Choose an empty folder for the new project.": "此文件夹不为空，请为空项目选择一个空文件夹。"
+  "This folder is not empty. Choose an empty folder for the new project.": "此文件夹不为空，请为空项目选择一个空文件夹。",
+  "FINALIZING…": "正在收尾…",
+  "Download previous edits": "下载之前的修改",
+  "Previous edits exist for a project with this folder name. Download them and check which project they belong to. Deleted paths are listed in the archive.": "存在同名文件夹的旧修改。请下载后确认它们属于哪个项目。删除的文件路径会列在压缩包中。",
+  "Some audit groups were not completed:": "部分审校分组未完成：",
+  "This report no longer matches the current source or translation.": "报告已与当前原文或译文不一致。",
+  "Reviewed translation:": "报告中的译文：",
+  "Current translation:": "当前译文：",
+  "Reviewed source:": "报告中的原文：",
+  "Current source:": "当前原文："
 }

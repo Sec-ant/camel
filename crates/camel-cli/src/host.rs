@@ -448,6 +448,7 @@ impl Console {
             } => eprintln!("  {model}: {error}; trying {fallback}"),
             Event::Warning { .. }
             | Event::PageSaved { .. }
+            | Event::PageFinished { .. }
             | Event::GroupFinished { .. }
             | Event::SceneStarted { .. }
             | Event::SceneFinished { .. } => {}

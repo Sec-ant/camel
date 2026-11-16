@@ -41,6 +41,8 @@ export interface OpenOptions {
   readonly comic: { readonly id: number; readonly files: ComicFiles; readonly pages: readonly string[] } | null;
   readonly font: FontData;
   readonly onProgress: (done: number, total: number) => void;
+  /** Whether an asynchronous open is still the selected one. */
+  readonly isCurrent?: () => boolean;
 }
 
 /**
@@ -95,6 +97,7 @@ export class Session {
   /** Object URLs of original pages, most recently used last; shared by concurrent requests. */
   readonly #images = new Map<number, Promise<string>>();
   #previewUrls: string[] = [];
+  #disposed = false;
 
   private constructor(
     options: OpenOptions,
@@ -124,6 +127,7 @@ export class Session {
       files.read("glossary.json"),
       files.read(PLAN),
     ]);
+    if (options.isCurrent && !options.isCurrent()) throw new Error("The project open was superseded");
     const font = options.font.bytes.slice(0);
     await call("setFont", { font, glossary: glossary?.text ?? null }, [font]);
     const pages: PageState[] = [];
@@ -142,6 +146,7 @@ export class Session {
         pages.push({ summary, reference, revision: records[at]!.revision }),
       );
       options.onProgress(pages.length, index.length);
+      if (options.isCurrent && !options.isCurrent()) throw new Error("The project open was superseded");
     }
     // source.json is informational here (the comic is chosen in the browser), so a malformed
     // file only loses the displayed path.
@@ -160,6 +165,19 @@ export class Session {
   /** Record file names in index.json order. */
   get index(): readonly string[] {
     return this.#index;
+  }
+
+  /** Releases the session's image URLs and, unless reused, its comic reader. */
+  dispose(keepComic: number | null = null): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    for (const url of this.#images.values()) void url.then(URL.revokeObjectURL, () => undefined);
+    this.#images.clear();
+    this.#previewUrls.forEach(URL.revokeObjectURL);
+    this.#previewUrls = [];
+    if (this.comicId !== null && this.comicId !== keepComic) {
+      void call("closeComic", { id: this.comicId }).catch(() => undefined);
+    }
   }
 
   project(): Project {
@@ -309,6 +327,7 @@ export class Session {
       record: record.text,
       key: record.revision,
     });
+    if (this.#disposed) throw new Error("The project session was closed");
     const urls = rendered.images.map((bytes) => URL.createObjectURL(new Blob([bytes], { type: "image/png" })));
     const stale = this.#previewUrls;
     this.#previewUrls = urls;

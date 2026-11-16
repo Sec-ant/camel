@@ -74,9 +74,23 @@ pub enum Error {
 }
 
 impl Error {
+    /// Whether the operation stopped due to an acknowledged cancellation.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        matches!(
+            self,
+            Self::Cancelled
+                | Self::Host(HostError::Cancelled)
+                | Self::Translation(camel::translation::TranslationError::Cancelled)
+        )
+    }
+
     /// Wraps the error with what was being done, keeping its full description.
     #[must_use]
     pub fn context(self, what: impl std::fmt::Display) -> Self {
+        if self.is_cancelled() {
+            return Self::Cancelled;
+        }
         Self::Message(format!("{what}: {}", chain(&self)))
     }
 }

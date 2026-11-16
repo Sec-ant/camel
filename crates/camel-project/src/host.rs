@@ -146,6 +146,9 @@ pub enum HostError {
     /// A transient transport failure that may succeed on retry.
     #[error("{0}")]
     Network(String),
+    /// A pending host operation was cancelled by the user.
+    #[error("cancelled")]
+    Cancelled,
     /// Any other failure.
     #[error("{0}")]
     Io(String),
@@ -178,6 +181,13 @@ pub enum Event {
     PageSaved {
         /// Page record file name.
         page: String,
+    },
+    /// The outcome of processing a page, independent of record writes.
+    PageFinished {
+        /// Page record file name.
+        page: String,
+        /// The result of processing the page.
+        outcome: PageOutcome,
     },
     /// An exported page was written to the output.
     PageExported {
@@ -273,6 +283,18 @@ pub enum Event {
         /// Model tried next.
         fallback: String,
     },
+}
+
+/// The outcome of processing a page in a pipeline operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageOutcome {
+    /// The page was processed successfully.
+    Done,
+    /// The page needed no work.
+    Skipped,
+    /// The page could not be processed or its update conflicted.
+    Failed,
 }
 
 /// The per-page work an [`Event::PageStarted`] announces.

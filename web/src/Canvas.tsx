@@ -43,11 +43,13 @@ import {
   preview,
   previewBusy,
   pageImage,
+  registerGestureCancellation,
   savePreferences,
   selectRegion,
   selectedRegion,
   selection,
   setOverlay,
+  setDraft,
   setOverride,
   submit,
   tool,
@@ -181,6 +183,7 @@ export function Canvas() {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const pointer = useRef<number | null>(null);
   const frame = useRef(0);
   const fitted = useRef<number | null>(null);
 
@@ -315,7 +318,7 @@ export function Canvas() {
   };
 
   const onPointerDown = (event: PointerEvent): void => {
-    if (event.button === 2 || !page) return;
+    if (event.button === 2 || !page || pointer.current !== null) return;
     const [sx, sy] = localPoint(event);
     const [px, py] = toPage(view.value, sx, sy);
     viewportRef.current!.focus({ preventScroll: true });
@@ -366,6 +369,7 @@ export function Canvas() {
       pickColor(px, py);
       return;
     }
+    pointer.current = event.pointerId;
     viewportRef.current!.setPointerCapture(event.pointerId);
   };
 
@@ -373,7 +377,7 @@ export function Canvas() {
     const [sx, sy] = localPoint(event);
     cursor.value = { x: sx, y: sy };
     const current = gesture.current;
-    if (!current) return;
+    if (!current || pointer.current !== event.pointerId) return;
     if (current.kind === "pan") {
       zoomMode.value = "free";
       view.value = { ...current.origin, x: current.origin.x + sx - current.x, y: current.origin.y + sy - current.y };
@@ -400,8 +404,12 @@ export function Canvas() {
 
   const finish = (cancelled: boolean): void => {
     const current = gesture.current;
+    const pointerId = pointer.current;
+    pointer.current = null;
     gesture.current = null;
     gestureActive.value = false;
+    const viewport = viewportRef.current;
+    if (pointerId !== null && viewport?.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
     if (!current) return;
     if (current.kind === "stroke") {
       const spans = bitmapToSpans(current.bitmap, current.dirty);
@@ -410,12 +418,21 @@ export function Canvas() {
       const bounds = dragRect.value;
       dragRect.value = null;
       if (cancelled || !bounds || bounds.width < MIN_DRAFT || bounds.height < MIN_DRAFT) return;
-      selectRegion(null);
-      draft.value = { bounds };
-      tool.value = "select";
-      focusRequest.value = { field: "draft", region: null };
+      void selectRegion(null).then((changed) => {
+        if (!changed || pageIndex.value !== index) return;
+        setDraft({ bounds, source: "", translation: "" });
+        tool.value = "select";
+        focusRequest.value = { field: "draft", region: null };
+      });
     }
   };
+
+  useEffect(() => {
+    const cancel = (): void => finish(true);
+    const unregister = registerGestureCancellation(cancel);
+    window.addEventListener("blur", cancel);
+    return () => { unregister(); window.removeEventListener("blur", cancel); cancel(); };
+  }, []);
 
   const showPatches = !comparing.value && viewMode.value !== "original";
   const result = preview.value;
@@ -435,8 +452,9 @@ export function Canvas() {
           tabIndex={-1}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
-          onPointerUp={() => finish(false)}
-          onPointerCancel={() => finish(true)}
+          onPointerUp={(event) => { if (event.pointerId === pointer.current) finish(false); }}
+          onPointerCancel={(event) => { if (event.pointerId === pointer.current) finish(true); }}
+          onLostPointerCapture={(event) => { if (event.pointerId === pointer.current) finish(true); }}
           onPointerLeave={() => (cursor.value = null)}
           onAuxClick={(event) => event.preventDefault()}
         >

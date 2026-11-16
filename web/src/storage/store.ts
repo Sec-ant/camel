@@ -17,7 +17,7 @@ export type WriteMode =
   | { readonly kind: "replace_if_revision"; readonly revision: string };
 
 /** Mirrors the pipeline's `HostError`: the Rust side reads `kind`. */
-export type HostErrorKind = "not_found" | "conflict" | "network" | "io";
+export type HostErrorKind = "not_found" | "conflict" | "network" | "cancelled" | "io";
 
 export class HostError extends Error {
   readonly kind: HostErrorKind;
@@ -37,7 +37,7 @@ export interface StoredBytes {
 /** Structured-cloneable description of a store, so a worker can open the same project. */
 export type StoreDescriptor =
   | { readonly kind: "directory"; readonly handle: FileSystemDirectoryHandle }
-  | { readonly kind: "overlay"; readonly name: string; readonly files: ReadonlyMap<string, File> };
+  | { readonly kind: "overlay"; readonly name: string; readonly files: ReadonlyMap<string, File>; readonly identity: string | null };
 
 export interface ProjectStore {
   readonly name: string;
@@ -75,6 +75,16 @@ export function checkMode(path: string, mode: WriteMode, current: string | null)
   if (mode.kind === "replace_if_revision" && current !== mode.revision) {
     throw new HostError("conflict", `${path} changed since it was read`);
   }
+}
+
+/** Publish an export file only when its name is unused or already has identical content. */
+export async function writeExportFile(store: ProjectStore, path: string, bytes: Uint8Array): Promise<void> {
+  const existing = await store.read(path);
+  if (existing) {
+    if (existing.bytes.length === bytes.length && existing.bytes.every((byte, index) => byte === bytes[index])) return;
+    throw new HostError("conflict", `${path} already exists with different content`);
+  }
+  await store.write(path, bytes, { kind: "create_new" });
 }
 
 function revisionOf(file: File): string {
@@ -237,6 +247,25 @@ export interface KeyValue {
   keys(prefix: string): Promise<string[]>;
 }
 
+/** Fingerprint the uploaded project's root JSON files, independent of its folder name. */
+export async function snapshotIdentity(files: ReadonlyMap<string, File>): Promise<string> {
+  const index = files.get("index.json");
+  if (!index) throw new Error("The project folder has no index.json");
+  const names: unknown = JSON.parse(await index.text());
+  if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) throw new Error("The project index is invalid");
+  const entries: [string, string][] = [];
+  const paths = new Set<string>(["index.json", ...names, ...[...files.keys()].filter((path) => !path.includes("/") && path.endsWith(".json"))]);
+  for (const path of [...paths].sort()) {
+    splitPath(path);
+    const file = files.get(path);
+    if (!file) throw new Error(`The project has no ${path}`);
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+    entries.push([path, Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("")]);
+  }
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(entries))));
+  return Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 /** An overlay entry: written bytes, or a tombstone (`data: null`) hiding an uploaded file. */
 interface OverlayEntry {
   readonly data: ArrayBuffer | null;
@@ -249,17 +278,19 @@ export class OverlayStore implements ProjectStore {
   readonly #files: ReadonlyMap<string, File>;
   readonly #kv: KeyValue;
   readonly #newRevision: () => string;
+  readonly #identity: string | null;
 
-  constructor(name: string, files: ReadonlyMap<string, File>, kv: KeyValue, newRevision = () => `local-${crypto.randomUUID()}`) {
+  constructor(name: string, files: ReadonlyMap<string, File>, kv: KeyValue, newRevision = () => `local-${crypto.randomUUID()}`, identity: string | null = null) {
     this.name = name;
     this.#files = files;
     this.#kv = kv;
     this.#newRevision = newRevision;
-    this.descriptor = { kind: "overlay", name, files };
+    this.#identity = identity;
+    this.descriptor = { kind: "overlay", name, files, identity };
   }
 
   #key(path: string): string {
-    return `overlay:${this.name}/${path}`;
+    return this.#identity === null ? `overlay:${this.name}/${path}` : `overlay:v2:${this.#identity}/${path}`;
   }
 
   async read(path: string): Promise<StoredBytes | null> {
@@ -344,16 +375,49 @@ export class OverlayStore implements ProjectStore {
     return paths;
   }
 
+  /** Uploaded files hidden by local deletions. */
+  async deletedChanges(): Promise<string[]> {
+    const prefix = this.#key("");
+    const paths: string[] = [];
+    for (const key of await this.#kv.keys(prefix)) {
+      if ((await this.#kv.get<OverlayEntry>(key))?.data === null) paths.push(key.slice(prefix.length));
+    }
+    return paths;
+  }
+
   async discard(): Promise<void> {
     for (const key of await this.#kv.keys(this.#key(""))) await this.#kv.delete(key);
   }
+}
+
+/** Opens this snapshot and exposes edits saved against earlier snapshots of the same folder name. */
+export async function snapshotOverlays(name: string, files: ReadonlyMap<string, File>, kv: KeyValue): Promise<{
+  current: OverlayStore;
+  previous: { identity: string; store: OverlayStore }[];
+}> {
+  const content = await snapshotIdentity(files);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([name, content]))));
+  const identity = Array.from(hash, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const key = `snapshot-projects:${name}`;
+  const identities = await navigator.locks.request(`camel:${key}`, async () => {
+    const saved = (await kv.get<string[]>(key)) ?? [];
+    if (!saved.includes(identity)) await kv.set(key, [...saved, identity]);
+    return saved;
+  });
+  const previous: { identity: string; store: OverlayStore }[] = [];
+  for (const old of identities) {
+    if (old !== identity && (await kv.keys(`overlay:v2:${old}/`)).length) {
+      previous.push({ identity: old, store: new OverlayStore(name, files, kv, undefined, old) });
+    }
+  }
+  return { current: new OverlayStore(name, files, kv, undefined, identity), previous };
 }
 
 /** Opens the store a descriptor (from `ProjectStore.descriptor`) describes. */
 export function openStore(descriptor: StoreDescriptor): ProjectStore {
   return descriptor.kind === "directory"
     ? new DirectoryStore(descriptor.handle)
-    : new OverlayStore(descriptor.name, descriptor.files, idbKeyValue);
+    : new OverlayStore(descriptor.name, descriptor.files, idbKeyValue, undefined, descriptor.identity);
 }
 
 /** What an output folder holds, judged by its visible entries (dotfiles such as .DS_Store are ignored). */

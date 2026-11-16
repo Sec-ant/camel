@@ -163,7 +163,12 @@ enum Command {
         report: Option<PathBuf>,
     },
     /// Show page and dialogue counts as JSON.
-    Inspect { project: PathBuf },
+    Inspect {
+        project: PathBuf,
+        /// Include versioned page states, plan status and suggested next actions.
+        #[arg(long)]
+        status: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -391,8 +396,12 @@ fn run(cli: Cli) -> Result<()> {
                 )
             }
         }
-        Command::Inspect { project } => {
-            let value = project::inspect(&project)?;
+        Command::Inspect { project, status } => {
+            let value = if status {
+                project::inspect_status(&project)?
+            } else {
+                project::inspect(&project)?
+            };
             let mut stdout = io::stdout().lock();
             serde_json::to_writer_pretty(&mut stdout, &value)?;
             writeln!(stdout)?;

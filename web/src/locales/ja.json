@@ -358,5 +358,14 @@
   "This browser cannot write to folders: the project is kept in its private storage and can be downloaded as a zip. Interrupted runs continue when started again with the same name.": "このブラウザはフォルダに書き込めません。プロジェクトはブラウザ内に保存され、ZIP でダウンロードできます。同じ名前で分析を再開できます。",
   "Contains an unfinished analysis: it continues where it stopped.": "未完了の分析があります。中断したところから続行します。",
   "This folder already holds a project. Open it from the Open project tab, or choose an empty folder.": "このフォルダには既にプロジェクトがあります。「プロジェクトを開く」で開くか、空のフォルダを選択してください。",
-  "This folder is not empty. Choose an empty folder for the new project.": "このフォルダは空ではありません。新しいプロジェクト用に空のフォルダを選択してください。"
+  "This folder is not empty. Choose an empty folder for the new project.": "このフォルダは空ではありません。新しいプロジェクト用に空のフォルダを選択してください。",
+  "FINALIZING…": "終了処理中…",
+  "Download previous edits": "以前の変更をダウンロード",
+  "Previous edits exist for a project with this folder name. Download them and check which project they belong to. Deleted paths are listed in the archive.": "同じフォルダー名の以前の変更があります。ダウンロードして対象のプロジェクトを確認してください。削除されたパスはアーカイブに記載されています。",
+  "Some audit groups were not completed:": "完了しなかった監査グループ：",
+  "This report no longer matches the current source or translation.": "このレポートは現在の原文または訳文と一致しません。",
+  "Reviewed translation:": "確認時の訳文：",
+  "Current translation:": "現在の訳文：",
+  "Reviewed source:": "確認時の原文：",
+  "Current source:": "現在の原文："
 }

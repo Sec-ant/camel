@@ -358,5 +358,14 @@
   "This browser cannot write to folders: the project is kept in its private storage and can be downloaded as a zip. Interrupted runs continue when started again with the same name.": "Ce navigateur ne peut pas écrire dans les dossiers : le projet reste dans son stockage et peut être téléchargé en ZIP. Utilisez le même nom pour reprendre l’analyse.",
   "Contains an unfinished analysis: it continues where it stopped.": "Contient une analyse inachevée ; elle reprendra où elle s’est arrêtée.",
   "This folder already holds a project. Open it from the Open project tab, or choose an empty folder.": "Ce dossier contient déjà un projet. Ouvrez-le depuis « Ouvrir le projet » ou choisissez un dossier vide.",
-  "This folder is not empty. Choose an empty folder for the new project.": "Ce dossier n’est pas vide. Choisissez un dossier vide pour le nouveau projet."
+  "This folder is not empty. Choose an empty folder for the new project.": "Ce dossier n’est pas vide. Choisissez un dossier vide pour le nouveau projet.",
+  "FINALIZING…": "FINALISATION…",
+  "Download previous edits": "Télécharger les modifications précédentes",
+  "Previous edits exist for a project with this folder name. Download them and check which project they belong to. Deleted paths are listed in the archive.": "Des modifications précédentes existent pour un dossier de ce nom. Téléchargez-les et vérifiez à quel projet elles appartiennent. Les chemins supprimés figurent dans l’archive.",
+  "Some audit groups were not completed:": "Certains groupes de vérification sont incomplets :",
+  "This report no longer matches the current source or translation.": "Ce rapport ne correspond plus au texte source ou à la traduction actuelle.",
+  "Reviewed translation:": "Traduction vérifiée :",
+  "Current translation:": "Traduction actuelle :",
+  "Reviewed source:": "Texte source vérifié :",
+  "Current source:": "Texte source actuel :"
 }

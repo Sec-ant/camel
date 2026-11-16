@@ -166,10 +166,7 @@ pub async fn analyze_page(
                 message: issue.to_string(),
             });
         }
-        host.report(Event::PageAnalyzed {
-            page: name.clone(),
-            regions: page.regions.len(),
-        });
+        let regions = page.regions.len();
         save(
             host,
             &name,
@@ -188,7 +185,12 @@ pub async fn analyze_page(
             },
             WriteMode::CreateNew,
         )
-        .await
+        .await?;
+        host.report(Event::PageAnalyzed {
+            page: name.clone(),
+            regions,
+        });
+        Ok(())
     }
     .await
     .map_err(|error: Error| error.context(format!("analyze page {number}")))

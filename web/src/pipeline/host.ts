@@ -24,7 +24,7 @@ export class Cancellation {
 
 /** Classifies a failed fetch: every failure to get a response is transient (`network`). */
 export function requestError(error: unknown, timeoutMs: number, cancelled: boolean): HostError {
-  if (cancelled) return new HostError("network", "cancelled");
+  if (cancelled && error instanceof DOMException && error.name === "AbortError") return new HostError("cancelled", "cancelled");
   if (error instanceof DOMException && error.name === "TimeoutError") {
     return new HostError("network", `no response within ${Math.round(timeoutMs / 1000)} s`);
   }

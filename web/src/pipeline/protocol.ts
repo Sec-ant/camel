@@ -20,6 +20,7 @@ export type PipelineEvent =
     }
   | { readonly type: "page_analyzed"; readonly page: string; readonly regions: number }
   | { readonly type: "page_saved"; readonly page: string }
+  | { readonly type: "page_finished"; readonly page: string; readonly outcome: "done" | "skipped" | "failed" }
   | {
       readonly type: "page_exported";
       readonly action: "render" | "preserve" | "erase";

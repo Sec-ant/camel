@@ -21,12 +21,10 @@ function App() {
   const screen = view.value;
   return (
     <>
-      {screen === "settings" && (
-        <div class="app" data-screen="form">
-          <TitleBar />
-          <SettingsScreen />
-        </div>
-      )}
+      <div class="app" data-screen="form" hidden={screen !== "settings"}>
+        <TitleBar />
+        <SettingsScreen />
+      </div>
       {screen === "jobs" && project.value && (
         <div class="app" data-screen="form">
           <TitleBar />

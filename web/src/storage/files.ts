@@ -9,7 +9,8 @@
 // Text access for the workbench session sits on the byte-level stores in store.ts.
 
 import { idbGet, idbKeyValue, idbSet } from "./idb.ts";
-import { DirectoryStore, type FolderState, OverlayStore, type ProjectStore, type WriteMode, classifyFolder } from "./store.ts";
+import { publishModels, readModels } from "./models.ts";
+import { DirectoryStore, type FolderState, OverlayStore, type ProjectStore, type WriteMode, classifyFolder, snapshotOverlays } from "./store.ts";
 import { type ZipEntry, zipBlob } from "./zip.ts";
 
 declare global {
@@ -96,15 +97,19 @@ export async function recentProjects(): Promise<RecentProject[]> {
 }
 
 export async function rememberProject(entry: RecentProject): Promise<void> {
-  const others = (await recentProjects()).filter((item) => item.name !== entry.name);
-  await idbSet(RECENT, [entry, ...others].slice(0, RECENT_LIMIT));
+  await navigator.locks.request("camel:recent-projects", async () => {
+    const recent = await recentProjects();
+    const same = await Promise.all(recent.map((item) => item.project.isSameEntry(entry.project)));
+    await idbSet(RECENT, [entry, ...recent.filter((_, index) => !same[index])].slice(0, RECENT_LIMIT));
+  });
 }
 
-export async function forgetProject(name: string): Promise<void> {
-  await idbSet(
-    RECENT,
-    (await recentProjects()).filter((item) => item.name !== name),
-  );
+export async function forgetProject(entry: RecentProject): Promise<void> {
+  await navigator.locks.request("camel:recent-projects", async () => {
+    const recent = await recentProjects();
+    const same = await Promise.all(recent.map((item) => item.project.isSameEntry(entry.project)));
+    await idbSet(RECENT, recent.filter((_, index) => !same[index]));
+  });
 }
 
 async function permitted(handle: FileSystemHandle, mode: "read" | "readwrite"): Promise<boolean> {
@@ -180,6 +185,8 @@ async function uploadFolder(): Promise<{ name: string; files: Map<string, File> 
 export interface ProjectChoice {
   readonly files: ProjectFiles;
   readonly handle: FileSystemDirectoryHandle | null;
+  readonly legacyChanges?: OverlayStore;
+  readonly previousSnapshots?: { readonly identity: string; readonly store: OverlayStore }[];
 }
 
 export async function chooseProject(mode: "read" | "readwrite" = "readwrite"): Promise<ProjectChoice | null> {
@@ -188,7 +195,26 @@ export async function chooseProject(mode: "read" | "readwrite" = "readwrite"): P
     return handle && { files: new ProjectFiles(new DirectoryStore(handle)), handle };
   }
   const upload = await uploadFolder();
-  return upload && { files: new ProjectFiles(new OverlayStore(upload.name, upload.files, idbKeyValue)), handle: null };
+  if (!upload) return null;
+  const snapshots = await snapshotOverlays(upload.name, upload.files, idbKeyValue);
+  const legacy = new OverlayStore(upload.name, upload.files, idbKeyValue);
+  const hasLegacy = (await idbKeyValue.keys(`overlay:${upload.name}/`)).length > 0;
+  return { files: new ProjectFiles(snapshots.current), handle: null, previousSnapshots: snapshots.previous, ...(hasLegacy ? { legacyChanges: legacy } : {}) };
+}
+
+/** Download old name-scoped overlay files so their owner can review and recover them. */
+export async function downloadLegacyChanges(store: OverlayStore): Promise<void> {
+  const entries = await Promise.all((await store.changes()).map(async (path) => ({
+    path,
+    data: new Blob([(await store.read(path))!.bytes as Uint8Array<ArrayBuffer>]),
+  })));
+  const deleted = await store.deletedChanges();
+  if (deleted.length) {
+    let name = "camel-deleted-paths.json";
+    while (entries.some((entry) => entry.path === name)) name = `_${name}`;
+    entries.push({ path: name, data: new Blob([JSON.stringify(deleted, null, 2)], { type: "application/json" }) });
+  }
+  download(await zipBlob(entries), `camel-previous-edits-${store.name}.zip`);
 }
 
 export interface ComicChoice {
@@ -329,15 +355,7 @@ export interface ModelFiles {
 /** The models copied into this browser's private storage, if both are present. */
 export async function cachedModels(): Promise<ModelFiles | null> {
   const directory = await opfsDirectory(["models"], false);
-  if (!directory) return null;
-  try {
-    const [detector, recognizer] = await Promise.all(
-      MODEL_FILES.map(async (name) => (await directory.getFileHandle(name)).getFile()),
-    );
-    return { detector: detector!, recognizer: recognizer! };
-  } catch {
-    return null;
-  }
+  return readModels(directory, idbKeyValue);
 }
 
 /** Downloads the site's default models and stores them for later projects. */
@@ -348,12 +366,7 @@ export async function downloadModels(): Promise<ModelFiles> {
     return new File([await response.blob()], name);
   }));
   const directory = (await opfsDirectory(["models"], true))!;
-  for (const [index, name] of MODEL_FILES.entries()) {
-    const stream = await (await directory.getFileHandle(name, { create: true })).createWritable();
-    await stream.write(files[index]!);
-    await stream.close();
-  }
-  return (await cachedModels())!;
+  return publishModels(directory, idbKeyValue, { detector: files[0]!, recognizer: files[1]! });
 }
 
 /** Picks the model folder and caches detector.onnx and recognizer.onnx in private storage. */
@@ -374,20 +387,15 @@ export async function chooseModels(): Promise<ModelFiles | null> {
   const missing = MODEL_FILES.filter((name) => !found.has(name));
   if (missing.length > 0) throw new Error(`The folder has no ${missing.join(" or ")}`);
   const directory = (await opfsDirectory(["models"], true))!;
-  for (const name of MODEL_FILES) {
-    const stream = await (await directory.getFileHandle(name, { create: true })).createWritable();
-    await stream.write(found.get(name)!);
-    await stream.close();
-  }
-  return cachedModels();
+  return publishModels(directory, idbKeyValue, { detector: found.get(MODEL_FILES[0])!, recognizer: found.get(MODEL_FILES[1])! });
 }
 
 // ---------- Export targets ----------
 
 /** Where an export writes: a folder of files, or one archive file; `download` when it is in private storage. */
 export type ExportTarget =
-  | { readonly kind: "directory"; readonly handle: FileSystemDirectoryHandle; readonly download: boolean }
-  | { readonly kind: "archive"; readonly handle: FileSystemFileHandle; readonly download: boolean };
+  | { readonly kind: "directory"; readonly handle: FileSystemDirectoryHandle; readonly download: boolean; readonly temporary?: string }
+  | { readonly kind: "archive"; readonly handle: FileSystemFileHandle; readonly download: boolean; readonly temporary?: string };
 
 /**
  * Direct tier: the user picks the folder or the .cbz file. Snapshot tier: the export is
@@ -409,13 +417,11 @@ export async function chooseExportTarget(name: string, archive: boolean): Promis
     return handle && { kind: "directory", handle, download: false };
   }
   const exports = (await opfsDirectory(["exports"], true))!;
-  // Leftovers of an export that did not finish are removed with it.
-  const leftovers: string[] = [];
-  for await (const entry of exports.keys()) leftovers.push(entry);
-  for (const entry of leftovers) await exports.removeEntry(entry, { recursive: true });
+  const temporary = crypto.randomUUID();
+  const run = await exports.getDirectoryHandle(temporary, { create: true });
   return archive
-    ? { kind: "archive", handle: await exports.getFileHandle(name, { create: true }), download: true }
-    : { kind: "directory", handle: await exports.getDirectoryHandle(name, { create: true }), download: true };
+    ? { kind: "archive", handle: await run.getFileHandle(name, { create: true }), download: true, temporary }
+    : { kind: "directory", handle: await run.getDirectoryHandle(name, { create: true }), download: true, temporary };
 }
 
 /**
@@ -432,7 +438,7 @@ export async function downloadExport(target: ExportTarget): Promise<void> {
 
 /** Snapshot tier: removes an export from private storage. */
 export async function discardExport(target: ExportTarget): Promise<void> {
-  await (await opfsDirectory(["exports"], false))?.removeEntry(target.handle.name, { recursive: true });
+  if (target.temporary) await (await opfsDirectory(["exports"], false))?.removeEntry(target.temporary, { recursive: true });
 }
 
 /** Saves a blob through the browser's download mechanism. */

@@ -1,6 +1,8 @@
 // Install the starter project once into the same browser storage as other projects.
 import { browserProject, browserProjects, recentProjects, rememberedFont, saveFont } from "./storage/files.ts";
-import { DirectoryStore } from "./storage/store.ts";
+import { DirectoryStore, writeExportFile } from "./storage/store.ts";
+
+const installing = "camel.starter.installing";
 
 async function asset(path: string): Promise<ArrayBuffer> {
   const response = await fetch(new URL(path, import.meta.url));
@@ -11,7 +13,7 @@ async function asset(path: string): Promise<ArrayBuffer> {
 export async function installStarterProject(): Promise<FileSystemDirectoryHandle | null> {
   if (localStorage.getItem("camel.projects.initialized")) return null;
   const [existing, recent] = await Promise.all([browserProjects(), recentProjects()]);
-  if (existing.length || recent.length) {
+  if (!localStorage.getItem(installing) && (existing.length || recent.length)) {
     localStorage.setItem("camel.projects.initialized", "1");
     return null;
   }
@@ -26,21 +28,23 @@ export async function installStarterProject(): Promise<FileSystemDirectoryHandle
     asset("./sample/project/index.json"),
   ]);
   return navigator.locks.request("camel:create-browser-project", async () => {
-    if ((await browserProjects()).length || (await recentProjects()).length) {
+    if (!localStorage.getItem(installing) && ((await browserProjects()).length || (await recentProjects()).length)) {
       localStorage.setItem("camel.projects.initialized", "1");
       return null;
     }
+    localStorage.setItem(installing, "1");
     const directory = await browserProject("Anda's Game");
     const store = new DirectoryStore(directory);
     for (const [i, path] of projectPaths.entries()) {
-      await store.write(path, new Uint8Array(records[i]!), { kind: "create_new" });
+      await writeExportFile(store, path, new Uint8Array(records[i]!));
     }
     for (const [i, name] of imageNames.entries()) {
-      await store.write(`images/${name}`, new Uint8Array(images[i]!), { kind: "create_new" });
+      await writeExportFile(store, `images/${name}`, new Uint8Array(images[i]!));
     }
     if (!(await rememberedFont())) await saveFont(font);
-    await store.write("index.json", new Uint8Array(index), { kind: "create_new" });
+    await writeExportFile(store, "index.json", new Uint8Array(index));
     localStorage.setItem("camel.projects.initialized", "1");
+    localStorage.removeItem(installing);
     return directory;
   });
 }

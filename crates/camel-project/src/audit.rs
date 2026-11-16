@@ -686,7 +686,18 @@ pub async fn audit(
         results[index] = result;
     }
     drop(running);
-    if host.cancelled() {
+    if host.cancelled()
+        && results.iter().any(|result| {
+            result
+                .as_ref()
+                .is_none_or(|result| result.as_ref().err().is_some_and(Error::is_cancelled))
+        })
+        && results.iter().flatten().all(|result| match result {
+            Ok(TaskOutcome::Failure(_)) => false,
+            Err(error) => error.is_cancelled(),
+            _ => true,
+        })
+    {
         return Err(Error::Cancelled);
     }
     let mut outcomes = Vec::new();
@@ -694,6 +705,7 @@ pub async fn audit(
     for result in results.into_iter().flatten() {
         match result {
             Ok(outcome) => outcomes.push(outcome),
+            Err(error) if error.is_cancelled() => {}
             Err(error) => fatal.push(chain(&error)),
         }
     }

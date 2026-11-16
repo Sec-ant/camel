@@ -93,11 +93,22 @@ export class Progress {
         this.start(event.index - 1);
         break;
       case "page_analyzed":
-      case "page_saved": {
+      {
         const index = this.indexOf(event.page);
         if (index !== null) this.complete(index, now);
         break;
       }
+      case "page_finished": {
+        const index = this.indexOf(event.page);
+        if (index !== null) {
+          if (event.outcome === "done") this.complete(index, now);
+          else if (event.outcome === "skipped") this.skip(index);
+          else this.#set(index, PAGE_FAILED);
+        }
+        break;
+      }
+      case "page_saved":
+        break;
       case "page_exported":
         this.total = event.total;
         this.complete(event.index - 1, now);
@@ -248,6 +259,7 @@ export function describeEvent(event: PipelineEvent, time: number, indexOf: (page
     case "fallback":
       return line("warning", `${event.model}: ${event.error}; trying ${event.fallback}`);
     case "page_saved":
+    case "page_finished":
       return null;
   }
 }

@@ -49,7 +49,7 @@ export interface HttpResponse {
 /**
  * A project as a pipeline operation sees it. Paths are project-relative and
  * '/'-separated. Failures reject with an Error whose `kind` is "not_found",
- * "conflict", "network" (transient) or "io".
+ * "conflict", "network" (transient), "cancelled" or "io".
  */
 export interface JsHost {
   /** The project's name in messages. */
@@ -157,6 +157,7 @@ fn host_error(path: &str, error: &JsValue) -> HostError {
         Some("not_found") => HostError::NotFound(path.to_owned()),
         Some("conflict") => HostError::Conflict(path.to_owned()),
         Some("network") => HostError::Network(message(error)),
+        Some("cancelled") => HostError::Cancelled,
         _ => HostError::Io(message(error)),
     }
 }
@@ -412,6 +413,14 @@ fn js_error(error: &(dyn std::error::Error + 'static)) -> JsError {
     JsError::new(&chain(error))
 }
 
+fn pipeline_error(error: &camel_project::Error) -> JsValue {
+    let value = js_sys::Error::new(&chain(error));
+    if error.is_cancelled() {
+        value.set_name("CamelCancelled");
+    }
+    value.into()
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(options: &str) -> Result<T, JsError> {
     serde_json::from_str(options)
         .map_err(|error| JsError::new(&format!("Invalid options: {error}")))
@@ -624,16 +633,16 @@ struct PrepareOptions {
 ///
 /// Rejects with the command line's message.
 #[wasm_bindgen]
-pub async fn prepare(host: JsHost, options: String) -> Result<String, JsError> {
+pub async fn prepare(host: JsHost, options: String) -> Result<String, JsValue> {
     let options: PrepareOptions = parse(&options)?;
     let host = BrowserHost::new(host);
     camel_project::prepare::prepare(&host, &options.service.into(), options.jobs.max(1))
         .await
-        .map_err(|error| js_error(&error))?;
-    outcome(
+        .map_err(|error| pipeline_error(&error))?;
+    Ok(outcome(
         format!("Prepared {}", camel_project::prepare::PLAN_FILE),
         Some(camel_project::prepare::PLAN_FILE.to_owned()),
-    )
+    )?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -658,7 +667,7 @@ pub async fn translate(
     options: String,
     pages: Option<PageReader>,
     context: Option<JsHost>,
-) -> Result<String, JsError> {
+) -> Result<String, JsValue> {
     let options: TranslateRunOptions = parse(&options)?;
     let glossary = options
         .glossary
@@ -683,8 +692,8 @@ pub async fn translate(
         },
     )
     .await
-    .map_err(|error| js_error(&error))?;
-    outcome("Translation finished".into(), None)
+    .map_err(|error| pipeline_error(&error))?;
+    Ok(outcome("Translation finished".into(), None)?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -704,7 +713,7 @@ struct AuditOptions {
 /// Rejects with the command line's message; when groups failed, the partial
 /// report is saved first.
 #[wasm_bindgen]
-pub async fn audit(host: JsHost, options: String) -> Result<String, JsError> {
+pub async fn audit(host: JsHost, options: String) -> Result<String, JsValue> {
     let options: AuditOptions = parse(&options)?;
     let host = BrowserHost::new(host);
     let review = camel_project::audit::audit(
@@ -714,7 +723,7 @@ pub async fn audit(host: JsHost, options: String) -> Result<String, JsError> {
         &options.skip_pages,
     )
     .await
-    .map_err(|error| js_error(&error))?;
+    .map_err(|error| pipeline_error(&error))?;
     let bytes = to_json_bytes(&review).map_err(|error| js_error(&error))?;
     save_report(&host, &options.output, &bytes).await?;
     if !review.audit_failures.is_empty() {
@@ -723,12 +732,12 @@ pub async fn audit(host: JsHost, options: String) -> Result<String, JsError> {
             review.audit_failures.len(),
             camel_project::audit::failure_details(&review.audit_failures),
             options.output
-        )));
+        )).into());
     }
-    outcome(
+    Ok(outcome(
         format!("{} audit issues", review.audit_issues.len()),
         Some(options.output),
-    )
+    )?)
 }
 
 #[derive(Debug, Deserialize)]
@@ -776,7 +785,7 @@ pub async fn check_layout(
     options: String,
     pages: PageReader,
     font: Vec<u8>,
-) -> Result<String, JsError> {
+) -> Result<String, JsValue> {
     let options: LayoutOptions = parse(&options)?;
     let host = BrowserHost::new(host);
     let report = camel_project::check_layout::check_layout(
@@ -786,7 +795,7 @@ pub async fn check_layout(
         &options.font_name,
     )
     .await
-    .map_err(|error| js_error(&error))?;
+    .map_err(|error| pipeline_error(&error))?;
     let bytes = to_json_bytes(&report).map_err(|error| js_error(&error))?;
     save_report(&host, &options.output, &bytes).await?;
     let failed = report.failed_pages();
@@ -794,10 +803,14 @@ pub async fn check_layout(
         return Err(JsError::new(&format!(
             "{failed} pages could not be checked; see {}",
             options.output
-        )));
+        ))
+        .into());
     }
     let issues: usize = report.pages.iter().map(|page| page.issues.len()).sum();
-    outcome(format!("{issues} layout issues"), Some(options.output))
+    Ok(outcome(
+        format!("{issues} layout issues"),
+        Some(options.output),
+    )?)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -838,7 +851,7 @@ pub async fn export_pages(
     pages: PageReader,
     font: Option<Vec<u8>>,
     output: ExportOutput,
-) -> Result<String, JsError> {
+) -> Result<String, JsValue> {
     let options: ExportOptions = parse(&options)?;
     let host = BrowserHost::new(host);
     let format = match options.format {
@@ -870,7 +883,7 @@ pub async fn export_pages(
             camel_project::export::erase(&host, &mut pages, &mut sink, format, options.masks).await
         }
     }
-    .map_err(|error| js_error(&error))?;
+    .map_err(|error| pipeline_error(&error))?;
     let output = match sink.report {
         Some(report) => {
             save_report(&host, &options.report_path, &report).await?;
@@ -878,5 +891,5 @@ pub async fn export_pages(
         }
         None => None,
     };
-    outcome("Export finished".into(), output)
+    Ok(outcome("Export finished".into(), output)?)
 }

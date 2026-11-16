@@ -5,11 +5,12 @@ use std::path::Path;
 use anyhow::{Context as _, Result};
 use camel_project::{
     Record,
+    host::{Host, WriteMode},
     plan::{Plan, PlanKey},
     prepare::PLAN_FILE,
 };
 
-use super::{read, run, save};
+use super::{read, run};
 use crate::{
     Service,
     host::{Console, FsHost},
@@ -31,19 +32,49 @@ pub(super) fn save_edited(
     name: &str,
     record: &Record,
     plan_changed: bool,
+    expected: &str,
 ) -> Result<()> {
+    let host = FsHost::new(project, Console::new(true));
+    let plan_revision = if plan_changed {
+        futures::executor::block_on(host.revision(PLAN_FILE))?
+    } else {
+        None
+    };
     let plan = if plan_changed {
         repaired_plan(project, name, record)?
     } else {
         None
     };
-    save(&project.join(name), record, true)?;
+    futures::executor::block_on(host.write(
+        name,
+        &camel_project::to_json_bytes(record)?,
+        WriteMode::ReplaceIfRevision(expected.to_owned()),
+    ))?;
     if let Some(plan) = plan {
-        save(&project.join(PLAN_FILE), &plan, true).context(
+        let revision = plan_revision
+            .context("page saved but the translation plan changed while it was being repaired")?;
+        futures::executor::block_on(host.write(
+            PLAN_FILE,
+            &camel_project::to_json_bytes(&plan)?,
+            WriteMode::ReplaceIfRevision(revision),
+        ))
+        .context(
             "page saved but translation plan update failed; the stale plan will be rejected",
         )?;
     }
     Ok(())
+}
+
+/// Reads a page and the revision that its eventual write must still match.
+pub(super) fn load_edited(project: &Path, name: &str) -> Result<(String, Record)> {
+    let host = FsHost::new(project, Console::new(true));
+    let revision = futures::executor::block_on(host.revision(name))?
+        .with_context(|| format!("{}: file not found", host.locate(name)))?;
+    let bytes = futures::executor::block_on(host.read(name))?
+        .with_context(|| format!("{}: file not found", host.locate(name)))?;
+    let record =
+        serde_json::from_slice(&bytes).with_context(|| format!("read {}", host.locate(name)))?;
+    Ok((revision, record))
 }
 
 /// The project's plan repaired for `updated` replacing `page`, or `None`
@@ -71,6 +102,7 @@ pub(super) fn repaired_plan(project: &Path, page: &str, updated: &Record) -> Res
 
 #[cfg(test)]
 mod tests {
+    use super::super::save;
     use super::*;
     use camel_project::plan::{INVALIDATED_SUMMARY, Scene, fingerprint};
     use serde_json::json;
@@ -89,6 +121,18 @@ mod tests {
     fn load(project: &Path) -> Result<Plan> {
         let host = FsHost::new(project, Console::new(true));
         run(camel_project::prepare::load_plan(&host))
+    }
+
+    #[test]
+    fn edited_page_does_not_replace_a_concurrent_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = "00001.json";
+        save(&dir.path().join(name), &record("original"), false).unwrap();
+        let (revision, _) = load_edited(dir.path(), name).unwrap();
+        save(&dir.path().join(name), &record("other writer"), true).unwrap();
+        assert!(save_edited(dir.path(), name, &record("review"), false, &revision).is_err());
+        let current: Record = read(&dir.path().join(name)).unwrap();
+        assert_eq!(current.page.regions[0].block.text, "other writer");
     }
 
     #[test]
@@ -113,7 +157,8 @@ mod tests {
         save(&dir.path().join(&index[3]), &record("new"), true).unwrap();
         load(dir.path()).unwrap_err();
         save(&dir.path().join(&index[3]), &records[3], true).unwrap();
-        save_edited(dir.path(), &index[3], &record("new"), true).unwrap();
+        let (revision, _) = load_edited(dir.path(), &index[3]).unwrap();
+        save_edited(dir.path(), &index[3], &record("new"), true, &revision).unwrap();
         let repaired = load(dir.path()).unwrap();
         assert_eq!(repaired.scenes[0].summary, INVALIDATED_SUMMARY);
     }

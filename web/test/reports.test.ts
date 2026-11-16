@@ -1,18 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { auditItems, itemsByPage, latestReport, replaceRetainedTerm, reportPath, termItems } from "../src/reports.ts";
+import { auditFailures, auditItems, itemsByPage, latestReport, replaceRetainedTerm, reportPath, termItems } from "../src/reports.ts";
 
 test("report paths sort by local time and the latest of a kind is found", () => {
-  assert.equal(reportPath("audit", new Date(2026, 10, 5, 9, 3, 7)), "reports/audit-20261105-090307.json");
+  const first = reportPath("audit", new Date(2026, 10, 5, 9, 3, 7, 120));
+  const second = reportPath("audit", new Date(2026, 10, 5, 9, 3, 7, 120));
+  assert.notEqual(first, second);
+  assert.match(first, /^reports\/audit-20261105-090307-120-[a-f0-9-]{36}\.json$/);
   const names = ["audit-20261105-090307.json", "audit-20261114-235959.json", "terms-20261201-000000.json", "audit-notes.json"];
   assert.equal(latestReport(names, "audit"), "reports/audit-20261114-235959.json");
   assert.equal(latestReport(names, "layout"), null);
+  assert.equal(latestReport(["audit-20261105-090307.json", first.split("/")[1]!], "audit"), first);
+});
+
+test("partial audit reports retain the failed groups and their pages", () => {
+  const failures = [{ kind: "validation", pages: ["00001.json", "00002.json"], error: "invalid response" }];
+  assert.deepEqual(auditFailures(JSON.stringify({ audit_issues: [], audit_failures: failures })), failures);
+  assert.deepEqual(auditFailures(JSON.stringify({ audit_issues: [] })), []);
 });
 
 test("audit issues become items with the model's replacement translation", () => {
   const report = {
     schema_version: 1,
-    pages: [],
+    pages: [{ page: "00001.json", regions: [{ id: 7, source: "Not yet." }] }],
     audit_issues: [
       {
         page: "00001.json",
@@ -31,6 +41,7 @@ test("audit issues become items with the model's replacement translation", () =>
       kind: "audit",
       page: "00001.json",
       region: 7,
+      source: "Not yet.",
       label: "MAJOR · MEANING",
       reason: "Reverses the meaning.",
       evidence: "Not yet.",

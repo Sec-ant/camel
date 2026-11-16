@@ -99,15 +99,20 @@ pub(super) async fn parallel<H: Host, S: PageSource>(
     drop(running);
     let mut known: BTreeMap<String, String> = BTreeMap::new();
     let mut errors = Vec::new();
+    let mut cancelled = false;
     let mut failed_pages = 0;
     let mut filtered_pages = 0;
     for (i, result) in results.into_iter().enumerate() {
+        if result.is_none() && host.cancelled() {
+            cancelled = true;
+        }
         if let Some(result) = result {
             match result {
                 Ok((_, failed, filtered)) => {
                     failed_pages += failed;
                     filtered_pages += filtered;
                 }
+                Err(error) if error.is_cancelled() => cancelled = true,
                 Err(error) => errors.push(format!("scene {}: {}", i + 1, chain(&error))),
             }
         }
@@ -156,6 +161,9 @@ pub(super) async fn parallel<H: Host, S: PageSource>(
     }
     if !errors.is_empty() {
         return fail(errors.join("\n"));
+    }
+    if cancelled {
+        return Err(Error::Cancelled);
     }
     Ok(())
 }

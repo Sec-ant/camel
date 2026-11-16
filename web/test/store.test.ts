@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { exportSnapshot } from "../src/pipeline/snapshot.ts";
 import { test } from "node:test";
-import { DirectoryStore, HostError, type KeyValue, OverlayStore, checkMode, classifyFolder, splitPath } from "../src/storage/store.ts";
+import { DirectoryStore, HostError, type KeyValue, OverlayStore, checkMode, classifyFolder, snapshotIdentity, snapshotOverlays, splitPath, writeExportFile } from "../src/storage/store.ts";
 
 function memory(): KeyValue {
   const map = new Map<string, unknown>();
@@ -186,4 +187,78 @@ test("concurrent compare-and-swap writes to one file: the second sees the first"
     ["fulfilled", "rejected"],
   );
   assert.equal(text((await store.read("00001.json"))?.bytes), "b");
+});
+
+
+test("same-named snapshots keep edits separate and reopen the same snapshot", async () => {
+  const kv = memory();
+  const index = file("index.json", '["00001.json"]');
+  const a = new Map([["index.json", index], ["00001.json", file("00001.json", "project A")]]);
+  const b = new Map([["index.json", index], ["00001.json", file("00001.json", "project B")]]);
+  const aId = await snapshotIdentity(a);
+  const bId = await snapshotIdentity(b);
+  assert.notEqual(aId, bId);
+  const withGlossary = new Map(a);
+  withGlossary.set("glossary.json", file("glossary.json", '{"term":"word"}'));
+  assert.notEqual(await snapshotIdentity(withGlossary), aId);
+  const first = new OverlayStore("book", a, kv, () => "a1", aId);
+  const second = new OverlayStore("book", b, kv, () => "b1", bId);
+  await first.write("00001.json", bytes("A edited"), { kind: "replace" });
+  assert.equal(text((await second.read("00001.json"))?.bytes), "project B");
+  const reopened = new OverlayStore("book", a, kv, () => "a2", await snapshotIdentity(a));
+  assert.equal(text((await reopened.read("00001.json"))?.bytes), "A edited");
+  await reopened.discard();
+  assert.equal(text((await second.read("00001.json"))?.bytes), "project B");
+});
+
+test("legacy deleted files remain available for recovery", async () => {
+  const store = overlay({ "a.json": file("a.json", "original") });
+  await store.remove("a.json");
+  assert.deepEqual(await store.deletedChanges(), ["a.json"]);
+});
+
+test("edits from an earlier snapshot remain recoverable after the uploaded project changes", async () => {
+  const kv = memory();
+  const index = file("index.json", '["00001.json"]');
+  const original = new Map([["index.json", index], ["00001.json", file("00001.json", "original")]]);
+  const changed = new Map([["index.json", index], ["00001.json", file("00001.json", "changed")]]);
+  const first = await snapshotOverlays("book", original, kv);
+  await first.current.write("00001.json", bytes("local edit"), { kind: "replace" });
+  const anotherName = await snapshotOverlays("another book", original, kv);
+  assert.equal(text((await anotherName.current.read("00001.json"))?.bytes), "original");
+  const next = await snapshotOverlays("book", changed, kv);
+  assert.equal(text((await next.current.read("00001.json"))?.bytes), "changed");
+  assert.equal(next.previous.length, 1);
+  assert.equal(text((await next.previous[0]!.store.read("00001.json"))?.bytes), "local edit");
+  const reopened = await snapshotOverlays("book", original, kv);
+  assert.equal(text((await reopened.current.read("00001.json"))?.bytes), "local edit");
+});
+
+test("export preserves different existing files and accepts identical output", async () => {
+  const store = overlay({ "00001.png": file("00001.png", "original") });
+  await writeExportFile(store, "00001.png", bytes("original"));
+  await rejectsWith(writeExportFile(store, "00001.png", bytes("different")), "conflict");
+  assert.equal(text((await store.read("00001.png"))?.bytes), "original");
+  await writeExportFile(store, "00002.png", bytes("new page"));
+  assert.equal(text((await store.read("00002.png"))?.bytes), "new page");
+});
+
+
+test("an export uses a consistent snapshot of the project and glossary", async () => {
+  const store = overlay({ "index.json": file("index.json", '["00001.json"]'), "00001.json": file("00001.json", "before"), "glossary.json": file("glossary.json", "{}") });
+  const snapshot = await exportSnapshot(store);
+  await store.write("00001.json", bytes("after"), { kind: "replace" });
+  await store.write("glossary.json", bytes('{"term":"word"}'), { kind: "replace" });
+  assert.equal(text((await snapshot.read("00001.json"))?.bytes), "before");
+  assert.equal(text((await snapshot.read("glossary.json"))?.bytes), "{}");
+});
+
+test("an export refuses a project changed while its snapshot is captured", async () => {
+  const store = overlay({ "index.json": file("index.json", '["00001.json"]'), "00001.json": file("00001.json", "before") });
+  const originalRevision = store.revision.bind(store);
+  store.revision = async (path) => {
+    if (path === "index.json") await store.write("00001.json", bytes("after"), { kind: "replace" });
+    return originalRevision(path);
+  };
+  await rejectsWith(exportSnapshot(store), "conflict");
 });

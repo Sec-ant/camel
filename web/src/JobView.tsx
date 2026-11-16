@@ -9,6 +9,7 @@ import { formatDuration } from "./pipeline/progress.ts";
 const STATUS_LABELS: Record<JobStatus, string> = {
   running: "RUNNING",
   cancelling: "CANCELLING…",
+  finalizing: "FINALIZING…",
   done: "DONE",
   failed: "FAILED",
   cancelled: "CANCELLED",
@@ -47,13 +48,13 @@ function useTicker(active: boolean): number {
 export function JobView(props: { onPage?: (index: number) => void }) {
   void jobVersion.value;
   const job = currentJob.value;
-  const running = job?.status === "running" || job?.status === "cancelling";
+  const running = job?.status === "running" || job?.status === "cancelling" || job?.status === "finalizing";
   const now = useTicker(running);
   if (!job) return null;
   const { progress } = job;
   const units = progress.units;
   const eta = running ? progress.eta(now) : null;
-  const elapsed = (job.finished ?? now) - job.started;
+  const elapsed = Math.max(0, (job.finished ?? now) - job.started);
   const readout = [
     `${t(running ? VERBS[job.kind] : job.title)} ${units.finished} / ${units.total} ${t(units.label)}`,
     job.workers > 1 ? `${job.workers} ${t("workers")}` : null,
@@ -73,7 +74,7 @@ export function JobView(props: { onPage?: (index: number) => void }) {
             {t(STATUS_LABELS[job.status])}
           </span>
           {running && (
-            <button type="button" class="button" disabled={job.status === "cancelling"} onClick={cancelJob}>
+            <button type="button" class="button" disabled={job.status !== "running"} onClick={cancelJob}>
               {t("Cancel")}</button>
           )}
         </span>
@@ -136,6 +137,7 @@ export function JobView(props: { onPage?: (index: number) => void }) {
 
 /** Page states at a glance; the Problems and Log lists link to the pages. */
 function PageMap({ job }: { job: Job }) {
+  void jobVersion.value;
   const { states } = job.progress;
   const cells = [];
   for (let index = 0; index < states.length; index++) {
@@ -166,6 +168,7 @@ function PageMap({ job }: { job: Job }) {
 
 /** Keeps the log scrolled to the newest line unless the reader scrolled up. */
 function Log({ job, onPage }: { job: Job; onPage?: ((index: number) => void) | undefined }) {
+  void jobVersion.value;
   const list = useRef<HTMLOListElement>(null);
   const pinned = useRef(true);
   const lines = job.log;

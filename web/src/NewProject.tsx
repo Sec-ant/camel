@@ -3,9 +3,10 @@ import { t } from "./i18n.ts";
 // pool of workers (resumable) and opens the workbench when it completes.
 
 import { useEffect, useState } from "preact/hooks";
-import { call } from "./engine.ts";
+import { signal } from "@preact/signals";
+import { ComicSelection } from "./comic-selection.ts";
 import { JobView } from "./JobView.tsx";
-import { Slot, type Check, comicName, errorMessage, replaceComic } from "./OpenScreen.tsx";
+import { Slot, type Check, comicName, errorMessage } from "./OpenScreen.tsx";
 import { currentJob, defaultWorkers, jobRunning, jobVersion, runAnalysis } from "./pipeline/jobs.ts";
 import { Session } from "./session.ts";
 import { start } from "./state.ts";
@@ -34,6 +35,7 @@ import { DirectoryStore, type FolderState } from "./storage/store.ts";
 
 const DETECTOR_SOURCE = "https://huggingface.co/ogkalu/comic-text-and-bubble-detector";
 const RECOGNIZER_SOURCE = "https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/default_models.yaml";
+export const analysisStarting = signal(false);
 
 const FOLDER_NOTES: Record<FolderState, string | null> = {
   empty: null,
@@ -53,6 +55,7 @@ function megabytes(bytes: number): string {
 
 export function NewProject() {
   void jobVersion.value;
+  const [chooser] = useState(() => new ComicSelection());
   const [comic, setComic] = useState<{ choice: ComicChoice; id: number; pages: string[] } | null>(null);
   const [comicCheck, setComicCheck] = useState<Check>({ state: "idle" });
   const [output, setOutput] = useState<Output | null>(null);
@@ -65,12 +68,14 @@ export function NewProject() {
   const [problem, setProblem] = useState<string | null>(null);
   const [opening, setOpening] = useState<{ done: number; total: number } | null>(null);
 
+  useEffect(() => () => chooser.dispose(), []);
+
   useEffect(() => {
     void rememberedFont().then((remembered) => remembered && setFont(remembered));
     void cachedModels().then((cached) => {
       setModels(cached);
       setModelCheck({ state: cached ? "ok" : "idle" });
-    });
+    }).catch((error: unknown) => setModelCheck({ state: "error", message: errorMessage(error) }));
     if (tier === "snapshot") void browserProjects().then(setExisting);
   }, []);
 
@@ -86,16 +91,12 @@ export function NewProject() {
   const loadComic = async (choice: ComicChoice): Promise<void> => {
     setComicCheck({ state: "checking" });
     try {
-      const opened = await replaceComic(comic, choice);
-      if (opened.pages.length === 0) {
-        void call("closeComic", { id: opened.id });
-        throw new Error("it has no PNG or JPEG pages");
-      }
+      const opened = await chooser.choose(choice.comic);
+      if (!opened) return;
       setComic({ choice, ...opened });
       setComicCheck({ state: "ok" });
       setName((current) => current || comicName(choice).replace(/\.[^.]+$|\/$/, ""));
     } catch (error) {
-      setComic(null);
       setComicCheck({ state: "error", message: `Cannot read ${comicName(choice)}: ${errorMessage(error)}` });
     }
   };
@@ -105,15 +106,19 @@ export function NewProject() {
   const outputBlocked = targetState === "project" || targetState === "occupied";
   const ready =
     comic !== null &&
+    comicCheck.state === "ok" &&
     models !== null &&
     font !== null &&
     (tier === "direct" ? output !== null : name.trim() !== "") &&
     !outputBlocked &&
+    !analysisStarting.value &&
     !running &&
     opening === null;
 
   const run = async (): Promise<void> => {
-    if (!comic || !models || !font) return;
+    if (!comic || !models || !font || analysisStarting.value) return;
+    analysisStarting.value = true;
+    try {
     setProblem(null);
     const handle = tier === "direct" ? output!.handle : await browserProject(name.trim());
     if (tier === "snapshot") await persistStorage();
@@ -143,10 +148,14 @@ export function NewProject() {
       if (tier === "direct") {
         await rememberProject({ name: files.name, opened: Date.now(), project: handle, comic: comic.choice.handle });
       }
+      chooser.release(comic.id);
       await start(session);
     } catch (error) {
       setOpening(null);
       throw error;
+    }
+    } finally {
+      analysisStarting.value = false;
     }
   };
 
@@ -165,7 +174,7 @@ export function NewProject() {
             ? t("Analysis writes the project into the folder you choose, exactly as camel analyze does. Interrupted runs continue when started again on the same folder.")
             : t("This browser cannot write to folders: the project is kept in its private storage and can be downloaded as a zip. Interrupted runs continue when started again with the same name.")}
         </p>
-        <fieldset class="slots" disabled={running || opening !== null}>
+        <fieldset class="slots" disabled={analysisStarting.value || running || opening !== null}>
           <Slot
             number={1}
             title={t("Comic")}

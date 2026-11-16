@@ -5,8 +5,10 @@ import {
   type Tool,
   brushSize,
   comparing,
+  cancelActiveGesture,
   draft,
   focusRequest,
+  gestureActive,
   helpOpen,
   overlays,
   redo,
@@ -14,6 +16,7 @@ import {
   selectRegion,
   selection,
   setOverlay,
+  setDraft,
   stepFilteredPage,
   stepPage,
   stepRegion,
@@ -121,7 +124,8 @@ function onKeyDown(event: KeyboardEvent): void {
   } else if (key === "enter" && selection.value !== null) {
     focusRequest.value = { field: "translation", region: selection.value };
   } else if (key === "escape") {
-    if (draft.value) draft.value = null;
+    if (gestureActive.value) cancelActiveGesture();
+    else if (draft.value) setDraft(null);
     else if (tool.value !== "select") tool.value = "select";
     else selectRegion(null);
   } else if (key === "?") {

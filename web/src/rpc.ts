@@ -13,7 +13,7 @@ export interface RequestMessage {
 
 export type ResponseMessage =
   | { readonly id: number; readonly kind: "ok"; readonly result: unknown }
-  | { readonly id: number; readonly kind: "error"; readonly error: string }
+  | { readonly id: number; readonly kind: "error"; readonly error: string; readonly name?: string }
   | { readonly id: number; readonly kind: "fatal"; readonly error: string }
   | { readonly id: number; readonly kind: "event"; readonly event: unknown };
 
@@ -46,7 +46,11 @@ export class WorkerClient<Requests extends RequestMap, Event = never> {
       }
       this.#pending.delete(message.id);
       if (message.kind === "ok") waiter.resolve(message.result);
-      else waiter.reject(new Error(message.error));
+      else {
+        const error = new Error(message.error);
+        if (message.name) error.name = message.name;
+        waiter.reject(error);
+      }
     };
     this.#worker.onerror = (event) => {
       this.#fail(new Error(`The ${description} stopped: ${event.message || "worker error"}`));
@@ -122,7 +126,11 @@ export function serve<Requests extends RequestMap, Event = never>(
         if (message.startsWith("camel-web panicked:") || error instanceof WebAssembly.RuntimeError) {
           failure = message;
         }
-        scope.postMessage({ id, kind: failure === null ? "error" : "fatal", error: failure ?? message });
+        if (failure === null) {
+          scope.postMessage({ id, kind: "error", error: message, name: error instanceof Error ? error.name : undefined });
+        } else {
+          scope.postMessage({ id, kind: "fatal", error: failure });
+        }
       });
   };
 }

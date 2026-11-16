@@ -20,6 +20,7 @@ pub(crate) struct Summary {
 impl Summary {
     pub fn new(record: &Record) -> Self {
         let regions = &record.page.regions;
+        let status = camel_project::status::PageStatus::of(record);
         let translated = |region: &camel::Region| {
             region
                 .translation
@@ -32,19 +33,9 @@ impl Summary {
             regions: regions.len(),
             translated: regions.iter().filter(|region| translated(region)).count(),
             preserved: regions.iter().filter(|region| preserved(region)).count(),
-            missing: if record.preserve_original {
-                0
-            } else {
-                regions
-                    .iter()
-                    .filter(|region| !translated(region) && !preserved(region))
-                    .count()
-            },
-            unresolved: record
-                .analysis
-                .as_ref()
-                .map_or(0, |analysis| analysis.unresolved_regions.len()),
-            issues: record.issues.len(),
+            missing: status.missing,
+            unresolved: status.unresolved,
+            issues: status.issues,
             preserve_original: record.preserve_original,
             plan_key: PlanKey::of(record),
         }

@@ -1,6 +1,7 @@
 import "./browser.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { setImmediate as tick } from "node:timers/promises";
 import type { Edit } from "../src/model.ts";
 import type { RequestMessage } from "../src/rpc.ts";
 import { Session } from "../src/session.ts";
@@ -18,6 +19,8 @@ function answer({ type, payload }: RequestMessage): unknown {
     }
     case "document":
       return JSON.stringify({ width: 1, height: 1, regions: [], unresolved: [] });
+    case "image":
+      return new Uint8Array([0x89, 0x50]).buffer;
     case "apply": {
       const { edits } = payload as { edits: string };
       const [edit] = JSON.parse(edits) as { text: string }[];
@@ -29,9 +32,13 @@ function answer({ type, payload }: RequestMessage): unknown {
 }
 
 class FakeEngine {
+  static closed: number[] = [];
+  static fonts = 0;
   onmessage: ((event: { data: unknown }) => void) | null = null;
 
   postMessage(message: RequestMessage): void {
+    if (message.type === "setFont") FakeEngine.fonts++;
+    if (message.type === "closeComic") FakeEngine.closed.push((message.payload as { id: number }).id);
     queueMicrotask(() => this.onmessage?.({ data: { id: message.id, kind: "ok", result: answer(message) } }));
   }
 
@@ -98,6 +105,35 @@ test("undo keeps its history entry when the write fails", async () => {
   assert.deepEqual(page.history, { undo: 0, redo: 1 });
   await session.redo(0, page.revision);
   assert.equal(await text(store), '{"v":"B"}');
+});
+
+test("closing a session releases its image URLs and comic reader", async () => {
+  const { session } = await open();
+  const original = URL.revokeObjectURL;
+  const revoked: string[] = [];
+  URL.revokeObjectURL = (url) => { revoked.push(url); original(url); };
+  try {
+    const image = await session.pageImage(0);
+    assert.ok(image);
+    session.dispose();
+    await tick();
+    assert.deepEqual(revoked, [image]);
+    assert.ok(FakeEngine.closed.includes(1));
+  } finally {
+    URL.revokeObjectURL = original;
+  }
+});
+
+test("a superseded project open does not replace the current font", async () => {
+  const kv = memory();
+  const store = new OverlayStore("book", new Map([["index.json", new File(['[]'], "index.json")]]), kv);
+  const fonts = FakeEngine.fonts;
+  await assert.rejects(Session.open({
+    files: new ProjectFiles(store), comic: null,
+    font: { name: "font.ttf", bytes: new ArrayBuffer(1) },
+    onProgress: () => undefined, isCurrent: () => false,
+  }), /superseded/);
+  assert.equal(FakeEngine.fonts, fonts);
 });
 
 test("a record changed elsewhere drops the page's undo history", async () => {

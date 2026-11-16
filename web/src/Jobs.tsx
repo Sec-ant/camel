@@ -11,7 +11,7 @@ import type { JobSpec, OperationKind } from "./pipeline/protocol.ts";
 import { onRadioGroupKey } from "./radio.ts";
 import { reportPath } from "./reports.ts";
 import { type ServiceOptions, type Settings, loadSettings, serviceOptions } from "./settings.ts";
-import { activeSession, announce, openPage, project, reviewItems, reviewSources, view } from "./state.ts";
+import { activeSession, announce, openPage, project, reviewFailures, reviewItems, reviewSources, view } from "./state.ts";
 import { chooseExportTarget, chooseProject, chooseTextFile, tier } from "./storage/files.ts";
 import type { StoreDescriptor } from "./storage/store.ts";
 
@@ -396,6 +396,7 @@ function Options({ operation, jobs }: { operation: OperationKind; jobs: number }
 function Reviews() {
   const items = reviewItems.value;
   const sources = reviewSources.value;
+  const failures = reviewFailures.value;
   const pages = project.value?.pages ?? [];
   if (!sources.audit && !sources.terms) return null;
   const indexOf = new Map(pages.map((page) => [page.file, page.index]));
@@ -412,6 +413,12 @@ function Reviews() {
       </div>
       <p class="helper pad">
         {t("From")}{" "}{[sources.audit, sources.terms].filter(Boolean).join(" and ")}{t(". Each item shows in the inspector next to its region.")}</p>
+      {failures.length > 0 && (
+        <div class="alert" role="status">
+          <p>{t("Some audit groups were not completed:")}</p>
+          <ul>{failures.map((failure) => <li>{failure.pages.join(", ")} · {failure.kind} · {failure.error}</li>)}</ul>
+        </div>
+      )}
       {listed.length > 0 && (
         <ol class="review-pages">
           {listed.map((entry) => (

@@ -960,6 +960,64 @@ fn inspection_summarizes_translation_progress() {
             "pages_with_issues": 1, "content_filter_affected_pages": 1
         })
     );
+    let output = success(
+        cli()
+            .arg("inspect")
+            .arg(dir.path())
+            .arg("--status")
+            .output()
+            .unwrap(),
+    );
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["plan"]["state"], "missing");
+    assert_eq!(status["pages"][0]["status"]["translation"], "complete");
+    assert_eq!(
+        status["pages"][0]["status"]["content_filter_affected"],
+        true
+    );
+    assert_eq!(status["pages"][1]["status"]["translation"], "partial");
+    assert_eq!(status["pages"][2]["status"]["translation"], "pending");
+    assert_eq!(status["pages"][3]["status"]["translation"], "empty");
+    assert_eq!(status["pages"][4]["status"]["translation"], "preserved");
+    assert_eq!(
+        status["pages"][1]["actions"],
+        json!(["translate_missing", "check_layout"])
+    );
+}
+
+#[test]
+fn structured_inspection_distinguishes_valid_stale_and_invalid_plans() {
+    use camel_project::{
+        Record,
+        plan::{PlanKey, fingerprint},
+    };
+    let dir = project(&[(1, "One")]);
+    let path = dir.path().join("translation-plan.json");
+    let index: Vec<String> =
+        serde_json::from_slice(&fs::read(dir.path().join("index.json")).unwrap()).unwrap();
+    let record: Record =
+        serde_json::from_slice(&fs::read(dir.path().join(&index[0])).unwrap()).unwrap();
+    let plan = json!({"version":1,"fingerprint":fingerprint(&index, &[PlanKey::of(&record)]),"scenes":[{"pages":index,"summary":"scene"}]});
+    let inspect = || -> Value {
+        let output = success(
+            cli()
+                .arg("inspect")
+                .arg(dir.path())
+                .arg("--status")
+                .output()
+                .unwrap(),
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+    write_record(&path, &plan);
+    assert_eq!(inspect()["plan"]["state"], "valid");
+    let mut stale = plan;
+    stale["fingerprint"] = json!("outdated");
+    write_record(&path, &stale);
+    assert_eq!(inspect()["plan"]["state"], "stale");
+    fs::write(path, b"{").unwrap();
+    assert_eq!(inspect()["plan"]["state"], "invalid");
 }
 
 #[test]

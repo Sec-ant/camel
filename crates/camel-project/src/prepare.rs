@@ -190,7 +190,17 @@ pub async fn prepare(host: &impl Host, service: &Service, jobs: usize) -> Result
             results[batch] = result;
         }
         drop(running);
-        if host.cancelled() {
+        if host.cancelled()
+            && results.iter().any(|result| {
+                result
+                    .as_ref()
+                    .is_none_or(|result| result.as_ref().err().is_some_and(Error::is_cancelled))
+            })
+            && results
+                .iter()
+                .flatten()
+                .all(|result| result.as_ref().err().is_none_or(Error::is_cancelled))
+        {
             return Err(Error::Cancelled);
         }
         let mut replies = Vec::with_capacity(batch_count);

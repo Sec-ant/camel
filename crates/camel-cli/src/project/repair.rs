@@ -1,7 +1,11 @@
-use super::{plan::save_edited, read, source::ProjectSource};
+use super::{
+    plan::{load_edited, save_edited},
+    read,
+    source::ProjectSource,
+};
 use anyhow::{Context as _, Result, bail, ensure};
 use camel::{Rect, Span, mask};
-use camel_project::{Record, edit};
+use camel_project::edit;
 use serde::Deserialize;
 use std::{collections::BTreeSet, path::Path};
 
@@ -50,7 +54,7 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
     let req: Request = read(request_path)?;
     let index: Vec<String> = read(&project.join("index.json"))?;
     ensure!(index.contains(&req.page), "page is not in project index");
-    let mut record: Record = read(&project.join(&req.page))?;
+    let (revision, mut record) = load_edited(project, &req.page)?;
     ensure!(
         record.source == req.source,
         "source reference differs from request"
@@ -252,7 +256,7 @@ pub fn repair_region(project: &Path, request_path: &Path) -> Result<()> {
     edit::insert_region(&mut record, insertion, region, geometry);
     edit::resolve_unresolved(&mut record, req.region);
     edit::finish(&mut record, true);
-    save_edited(project, &req.page, &record, true)
+    save_edited(project, &req.page, &record, true, &revision)
 }
 
 /// Removes a reviewed false region while retaining the initial OCR evidence.
@@ -260,7 +264,7 @@ pub fn remove_region(project: &Path, request_path: &Path) -> Result<()> {
     let req: RemoveRequest = read(request_path)?;
     let index: Vec<String> = read(&project.join("index.json"))?;
     ensure!(index.contains(&req.page), "page is not in project index");
-    let mut record: Record = read(&project.join(&req.page))?;
+    let (revision, mut record) = load_edited(project, &req.page)?;
     ensure!(
         record.source == req.source,
         "source reference differs from request"
@@ -277,5 +281,5 @@ pub fn remove_region(project: &Path, request_path: &Path) -> Result<()> {
     );
     edit::remove_region(&mut record, req.region)?;
     edit::finish(&mut record, true);
-    save_edited(project, &req.page, &record, true)
+    save_edited(project, &req.page, &record, true, &revision)
 }
